@@ -3,14 +3,41 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 from rich.console import Console
 
-from common.result import Ok
+from common.result import Err, Ok, Result
 from discovery import NodeKind, scan
 from flows import EdgeKind, Flow, FlowNode, save
 from tui.app import AgentCards, DeVinciApp, FlowsPanel
+
+
+class FakeCompletion:
+    def __init__(self, reply: Result[str, str]) -> None:
+        self._reply = reply
+        self.prompt: str | None = None
+
+    def complete(self, prompt: str) -> Result[str, str]:
+        self.prompt = prompt
+        return self._reply
+
+
+class FakeRunner:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def run(self, node, inputs: str) -> Result[str, str]:
+        self.calls.append(node.name)
+        return Ok(f"out:{node.name}")
+
+
+class FakeCommandWriter:
+    def write(
+        self, flow: Flow, *, command_name: str, flows_dir: Path
+    ) -> Result[str, str]:
+        return Err("skip crew")
 
 
 def _plain(renderable: object) -> str:
@@ -70,6 +97,74 @@ async def test_flows_panel_shows_disabled_hint_when_no_flows(tmp_path: Path) -> 
         panel = app.query_one(FlowsPanel)
         assert panel.option_count == 1
         assert panel.get_option_at_index(0).disabled
+
+
+@pytest.mark.asyncio
+async def test_authoring_flow_writes_a_claude_command(tmp_path: Path) -> None:
+    claude_root, flows_dir = _seed(tmp_path)
+    completion = FakeCompletion(
+        Ok(
+            json.dumps(
+                {
+                    "name": "review-pr",
+                    "description": "review a pull request",
+                    "nodes": [{"id": "plan", "ref": "agent:planner"}],
+                }
+            )
+        )
+    )
+    app = DeVinciApp(
+        roots=(claude_root,),
+        flows_dir=flows_dir,
+        completion=completion,
+        command_writer=FakeCommandWriter(),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        result = await app.author_and_save("review a PR")
+
+        assert isinstance(result, Ok)
+        command_path = claude_root / "commands" / "review-pr.md"
+        assert command_path.is_file()
+        text = command_path.read_text(encoding="utf-8")
+        assert "description: Run DeVinci flow 'review-pr'" in text
+        assert "--run-flow 'review-pr'" in text
+        assert "--flows-dir" in text
+        assert scan((claude_root,)).find(NodeKind.COMMAND, "review-pr") is not None
+
+
+@pytest.mark.asyncio
+async def test_authoring_flow_can_run_created_flow_immediately(tmp_path: Path) -> None:
+    claude_root, flows_dir = _seed(tmp_path)
+    completion = FakeCompletion(
+        Ok(
+            json.dumps(
+                {
+                    "name": "quick-check",
+                    "description": "quick check",
+                    "nodes": [{"id": "plan", "ref": "agent:planner"}],
+                }
+            )
+        )
+    )
+    runner = FakeRunner()
+    app = DeVinciApp(
+        roots=(claude_root,),
+        flows_dir=flows_dir,
+        completion=completion,
+        runner=runner,
+        command_writer=FakeCommandWriter(),
+        run_created_flow=True,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        result = await app.author_and_save("quick check")
+
+        assert isinstance(result, Ok)
+        assert runner.calls == ["planner"]
+        assert app._current_flow is result.value
 
 
 @pytest.mark.asyncio

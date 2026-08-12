@@ -42,6 +42,11 @@ from flows import (
     run_graph,
     save,
 )
+from flows.commands import (
+    CrewAICommandWriter,
+    FlowCommandWriter,
+    write_flow_command,
+)
 from runtime import ClaudeCodeCompletion, ClaudeCodeRunner, ClaudeCondition, Condition, NodeRunner
 from tui.blueprint import render_blueprint
 from tui.theme import OH_MY_PI, gradient_text, hex_of
@@ -412,6 +417,8 @@ class DeVinciApp(App[None]):
         completion: Completion | None = None,
         runner: NodeRunner | None = None,
         condition: Condition | None = None,
+        command_writer: FlowCommandWriter | None = None,
+        run_created_flow: bool = False,
     ) -> None:
         super().__init__()
         self._roots = roots if roots is not None else _default_roots()
@@ -419,6 +426,10 @@ class DeVinciApp(App[None]):
         self._completion = completion if completion is not None else ClaudeCodeCompletion()
         self._runner = runner if runner is not None else ClaudeCodeRunner(self._completion)
         self._condition = condition if condition is not None else ClaudeCondition(self._completion)
+        self._command_writer = (
+            command_writer if command_writer is not None else CrewAICommandWriter()
+        )
+        self._run_created_flow = run_created_flow
         self._catalog = Catalog()
         self._flows: dict[str, Flow] = {}
         self._current_flow: Flow | None = None
@@ -481,11 +492,11 @@ class DeVinciApp(App[None]):
         self.action_refresh()
 
     async def author_and_save(self, goal: str) -> Result[Flow, str]:
-        """Design a flow for `goal` from the current catalog and persist it.
+        """Design a flow, persist it, emit a Claude command, and optionally run it.
 
         Authoring is synchronous (the model call blocks), so it is offloaded to a
-        thread to keep the UI responsive. Returns the saved Flow or an error;
-        nothing is written unless authoring fully validated.
+        thread to keep the UI responsive. Command Markdown is generated after the
+        flow YAML exists so the slash command can run the saved flow by name.
         """
         goal = goal.strip()
         if not goal:
@@ -500,7 +511,25 @@ class DeVinciApp(App[None]):
         saved = save(authored.value, self._flows_dir)
         if isinstance(saved, Err):
             return saved
+
+        command = write_flow_command(
+            authored.value,
+            self._commands_dir(),
+            flows_dir=self._flows_dir,
+            writer=self._command_writer,
+        )
+        if isinstance(command, Err):
+            return command
+
+        if self._run_created_flow:
+            run = await self.run_flow(authored.value)
+            if isinstance(run, Err):
+                return run
         return Ok(authored.value)
+
+    def _commands_dir(self) -> Path:
+        root = self._roots[0] if self._roots else Path.cwd() / ".claude"
+        return root / "commands"
 
     # --- build a graph from cards -----------------------------------------
 

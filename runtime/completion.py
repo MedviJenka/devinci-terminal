@@ -1,4 +1,5 @@
-"""ClaudeCodeCompletion — the LLM boundary backed by `claude` headless.
+"""
+ClaudeCodeCompletion — the LLM boundary backed by `claude` headless.
 
 Satisfies the flows.author.Completion interface by shelling out to Claude Code
 in print mode (`claude -p <prompt>`). The subprocess call is injected (default:
@@ -7,17 +8,14 @@ runner passes an argument list (never a shell string) with a fixed timeout — n
 shell injection, no unbounded wait.
 """
 
-from __future__ import annotations
-
 import subprocess
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
-
+from typing import Protocol, runtime_checkable, Optional
 from common.result import Err, Ok, Result
+
 
 __all__ = ["Completion", "ClaudeCodeCompletion", "CommandRunner"]
 
-# A runner takes an argv list and returns the process stdout, or an error string.
 CommandRunner = Callable[[list[str]], Result[str, str]]
 
 _DEFAULT_TIMEOUT_SECONDS = 180.0
@@ -38,12 +36,7 @@ class Completion(Protocol):
 class ClaudeCodeCompletion:
     """Run a prompt through Claude Code headless and return its text reply."""
 
-    def __init__(
-        self,
-        runner: CommandRunner | None = None,
-        *,
-        binary: str = "claude",
-    ) -> None:
+    def __init__(self, runner: Optional[CommandRunner] = None, *, binary: str = "claude") -> None:
         self._runner = runner if runner is not None else _subprocess_runner
         self._binary = binary
 
