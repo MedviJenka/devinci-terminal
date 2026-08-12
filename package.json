@@ -15,6 +15,6 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
-    "@oh-my-pi/pi-tui": "^17.2.12"
+    "@oh-my-pi/pi-tui": "^17.2.15"
   }
 }

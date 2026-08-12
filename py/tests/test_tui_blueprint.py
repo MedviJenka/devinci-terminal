@@ -42,11 +42,11 @@ def _loop_graph() -> Graph:
     )
 
 
-def test_renders_each_node_as_a_box() -> None:
+def test_renders_each_node_as_a_card() -> None:
     text = _plain(render_blueprint(_loop_graph()))
-    # Boxes are drawn with # corners and - borders, every node id appears.
-    assert "#" in text and "-" in text
-    for token in ("prd", "code", "review"):
+    # Rounded cards are drawn with box-drawing borders; id + ref both appear.
+    assert "╭" in text and "│" in text
+    for token in ("prd", "code", "review", "agent:review"):
         assert token in text
 
 
@@ -57,12 +57,13 @@ def test_conditional_node_forks_into_if_and_else() -> None:
     assert "test" in text and "code" in text
 
 
-def test_back_edge_branch_is_marked_as_a_loop() -> None:
+def test_back_edge_branch_target_is_marked_as_a_loop() -> None:
+    # review's else branch loops back to code (an earlier node) → ↻ on that card.
     text = _plain(render_blueprint(_loop_graph()))
-    assert "loop" in text.lower()
+    assert "↻" in text
 
 
-def test_forward_chain_has_no_loop_label() -> None:
+def test_forward_chain_has_no_loop_marker() -> None:
     graph = Graph(
         name="chain",
         description="",
@@ -72,7 +73,8 @@ def test_forward_chain_has_no_loop_label() -> None:
             GraphNode("b", "agent:b"),
         ),
     )
-    assert "loop" not in _plain(render_blueprint(graph)).lower()
+    text = _plain(render_blueprint(graph))
+    assert "↻" not in text and "loop" not in text.lower()
 
 
 def test_entry_node_is_marked() -> None:

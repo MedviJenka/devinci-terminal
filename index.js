@@ -394,18 +394,27 @@ function runInteractive() {
     handleAction(actionFromKeyName(key.name));
   };
 
+  const rerender = () => renderToTerminal(state);
+
+  // Redraw on resize so the rendered button positions stay in sync with the
+  // hitboxes actionForClick computes from the live terminal size. Without this
+  // the buttons stay drawn at their old row after a resize while clicks are
+  // measured against the new size, so clicking a visible button does nothing.
+  const handleResize = () => rerender();
+
   const cleanup = () => {
     process.stdout.write("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[0m\n");
     process.stdin.setRawMode(false);
     process.stdin.removeListener("data", handleMouseData);
     process.stdin.removeListener("keypress", handleKeypress);
+    process.stdout.removeListener("resize", handleResize);
   };
 
-  const rerender = () => renderToTerminal(state);
   rerender();
 
   process.stdin.on("data", handleMouseData);
   process.stdin.on("keypress", handleKeypress);
+  process.stdout.on("resize", handleResize);
 
   process.on("SIGINT", () => {
     cleanup();

@@ -116,6 +116,71 @@ async def test_moving_the_cursor_rechains_new_nodes_from_the_selection(
 
 
 @pytest.mark.asyncio
+async def test_deleting_the_cursor_node_removes_it_and_lands_on_the_left(
+    tmp_path: Path,
+) -> None:
+    claude_root, flows_dir = _seed(tmp_path)
+    app = DeVinciApp(roots=(claude_root,), flows_dir=flows_dir)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:planner")  # planner (entry)
+        app.add_node_from_card("agent:planner")  # planner-2
+        app.add_node_from_card("agent:planner")  # planner-3, cursor here
+
+        result = app.delete_node("planner-3")
+        assert isinstance(result, Ok)
+        assert result.value.node_ids == ("planner", "planner-2")
+        # The cursor lands on the deleted node's left neighbour, so the next
+        # added card chains from there rather than a dangling reference.
+        assert app._cursor == "planner-2"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_node_drops_edges_that_point_at_it(tmp_path: Path) -> None:
+    claude_root, flows_dir = _seed(tmp_path)
+    app = DeVinciApp(roots=(claude_root,), flows_dir=flows_dir)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:planner")  # planner (entry)
+        app.add_node_from_card("agent:planner")  # planner-2 (planner → planner-2)
+
+        result = app.delete_node("planner-2")
+        assert isinstance(result, Ok)
+        head = next(n for n in result.value.nodes if n.id == "planner")
+        assert head.edges == ()
+        assert app._cursor == "planner"
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_entry_node_reassigns_entry(tmp_path: Path) -> None:
+    claude_root, flows_dir = _seed(tmp_path)
+    app = DeVinciApp(roots=(claude_root,), flows_dir=flows_dir)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:planner")  # planner (entry)
+        app.add_node_from_card("agent:planner")  # planner-2
+
+        result = app.delete_node("planner")
+        assert isinstance(result, Ok)
+        assert result.value.entry == "planner-2"
+        assert app._cursor == "planner-2"
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_last_node_clears_the_cursor(tmp_path: Path) -> None:
+    claude_root, flows_dir = _seed(tmp_path)
+    app = DeVinciApp(roots=(claude_root,), flows_dir=flows_dir)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:planner")
+
+        result = app.delete_node("planner")
+        assert isinstance(result, Ok)
+        assert result.value.node_ids == ()
+        assert app._cursor is None
+
+
+@pytest.mark.asyncio
 async def test_app_boots_headless_without_error(tmp_path: Path) -> None:
     claude_root, flows_dir = _seed(tmp_path)
     app = DeVinciApp(roots=(claude_root,), flows_dir=flows_dir)

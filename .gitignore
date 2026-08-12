@@ -6,3 +6,10 @@ pnpm-debug.log*
 .env
 .env.*
 .DS_Store
+
+# IDE
+.idea/
+
+# Tool-generated state
+.devflow/
+.devinci/
