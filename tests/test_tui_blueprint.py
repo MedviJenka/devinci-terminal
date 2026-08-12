@@ -14,8 +14,8 @@ from flows.graph import Edge, EdgeKind, Graph, GraphNode
 from tui.blueprint import render_blueprint
 
 
-def _plain(renderable: object) -> str:
-    console = Console(width=120, no_color=True)
+def _plain(renderable: object, *, width: int = 120) -> str:
+    console = Console(width=width, no_color=True)
     with console.capture() as capture:
         console.print(renderable)
     return capture.get()
@@ -108,6 +108,24 @@ def test_live_status_glyph_is_shown_when_provided() -> None:
     text = _plain(render_blueprint(_loop_graph(), statuses))
     # Succeeded ● and running ◐ glyphs distinguish live nodes from pending ◌.
     assert "●" in text and "◐" in text
+
+def test_many_linear_nodes_wrap_between_cards_in_narrow_terminals() -> None:
+    nodes = tuple(
+        GraphNode(
+            f"qa{i}",
+            f"agent:qa-agent-{i}",
+            edges=(Edge(to=f"qa{i + 1}"),) if i < 7 else (),
+        )
+        for i in range(8)
+    )
+    graph = Graph(name="many", description="", entry="qa0", nodes=nodes)
+
+    text = _plain(render_blueprint(graph), width=80)
+    lines = text.splitlines()
+
+    assert all(len(line) <= 80 for line in lines)
+    assert sum(line.lstrip().startswith("╭") for line in lines) <= 4
+    assert not any(line.strip().startswith(("agent:", "qa", "◌")) for line in lines)
 
 
 def test_empty_graph_renders_placeholder() -> None:

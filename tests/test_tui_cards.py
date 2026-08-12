@@ -61,6 +61,8 @@ async def test_agents_panel_is_visible_on_a_small_terminal(tmp_path: Path) -> No
         cards = app.query_one(AgentCards)
         assert cards.option_count >= 2  # both seeded agents catalogued
         assert cards.size.height > 0  # …and the panel is actually on screen
+        builder = app.query_one(GraphBuilderPanel)
+        assert builder.border_title == "FLOW BLUEPRINT"
         assert app.screen.children[0].region.y >= 0  # banner not pushed off top
 
 

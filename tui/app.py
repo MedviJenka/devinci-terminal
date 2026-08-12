@@ -412,7 +412,7 @@ class DeVinciApp(App[None]):
     def on_mount(self) -> None:
         self.query_one(AgentCards).border_title = "AGENTS ▸ pick to add a node"
         self.query_one(FlowsPanel).border_title = "FLOWS"
-        self.query_one(GraphBuilderPanel).border_title = "BUILD"
+        self.query_one(GraphBuilderPanel).border_title = "FLOW BLUEPRINT"
         self.query_one(RunPanel).border_title = "RUN"
         self.action_refresh()
 

@@ -15,6 +15,8 @@ mirrors the builder's linear-with-a-terminal-branch shape, not an arbitrary DAG.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from rich.console import Group
 from rich.text import Text
 
@@ -51,38 +53,103 @@ Block = list[list[Span]]
 
 
 def render_blueprint(
-    graph: Graph, statuses: dict[str, NodeStatus] | None = None,
-) -> Group:
-    """Render `graph` as a horizontal strip of node cards with labeled branches.
+    graph: Graph, statuses: dict[str, NodeStatus] | None = None
+) -> object:
+    """Render `graph` as node cards that wrap cleanly to the available width.
 
     `statuses` lights each card with its live status glyph/colour; omitted nodes
-    show pending. Returns a placeholder for a graph with no nodes.
+    show pending. The Rich renderable reads the terminal/panel width at print
+    time, so large graphs wrap between card groups instead of corrupting rows.
     """
     if not graph.nodes:
         return Group(Text("  (empty canvas)", style="dim italic"))
+    return _BlueprintCanvas(graph, statuses or {})
 
-    live = statuses or {}
+
+class _BlueprintCanvas:
+    """Rich renderable that packs blueprint blocks to the current console width."""
+
+    def __init__(self, graph: Graph, live: dict[str, NodeStatus]) -> None:
+        self._graph = graph
+        self._live = live
+
+    def __rich_console__(self, console: object, options: object) -> object:
+        max_width = max(
+            1, min(getattr(options, "max_width", 80), getattr(console, "width", 80))
+        )
+        wrapped = _wrap_units(_blueprint_units(self._graph, self._live), max_width)
+        for index, units in enumerate(wrapped):
+            if index:
+                yield Text()
+            yield from _trim(_merge_blocks(block for unit in units for block in unit))
+
+
+def _blueprint_units(graph: Graph, live: dict[str, NodeStatus]) -> list[list[Block]]:
+    """Return card/connector units; connectors stay paired with their target card."""
     order = {node.id: index for index, node in enumerate(graph.nodes)}
-    rows = [Text() for _ in range(_ROWS)]
+    units: list[list[Block]] = []
+    pending: Block | None = None
 
     for index, node in enumerate(graph.nodes):
-        _emit(rows, _card_block(node, node.id == graph.entry, live.get(node.id)))
+        card = _card_block(node, node.id == graph.entry, live.get(node.id))
+        if pending is None:
+            units.append([card])
+        else:
+            units.append([pending, card])
+            pending = None
 
         branch = _branch_edges(node)
         if branch is not None:
             on_true, on_false = branch
             loops_back = order.get(on_false.to, index) < index
-            _emit(rows, _spine_block())
-            _emit(rows, _branch_cards_block(graph, live, on_true.to, on_false.to, loops_back))
+            units.append(
+                [
+                    _spine_block(),
+                    _branch_cards_block(graph, live, on_true.to, on_false.to, loops_back),
+                ]
+            )
             break
 
         nxt = _next_edge(node)
         if nxt is None:
             break
         looping = node.repeat > 1 or order.get(nxt.to, index) <= index
-        _emit(rows, _connector_block(looping))
+        pending = _connector_block(looping)
 
-    return Group(*_trim(rows))
+    if pending is not None:
+        units.append([pending])
+    return units
+
+
+def _wrap_units(units: list[list[Block]], max_width: int) -> list[list[list[Block]]]:
+    """Pack units into visual lines without exceeding `max_width` when possible."""
+    lines: list[list[list[Block]]] = []
+    current: list[list[Block]] = []
+    current_width = 0
+
+    for unit in units:
+        width = sum(_block_width(block) for block in unit)
+        if current and current_width + width > max_width:
+            lines.append(current)
+            current = []
+            current_width = 0
+        current.append(unit)
+        current_width += width
+
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _merge_blocks(blocks: Iterable[Block]) -> list[Text]:
+    rows = [Text(no_wrap=True) for _ in range(_ROWS)]
+    for block in blocks:
+        _emit(rows, block)
+    return rows
+
+
+def _block_width(block: Block) -> int:
+    return max((sum(len(text) for text, _ in row) for row in block), default=0)
 
 
 def _emit(rows: list[Text], block: Block) -> None:
