@@ -13,3 +13,17 @@ pnpm-debug.log*
 # Tool-generated state
 .devflow/
 .devinci/
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Factory output — generated node bundles staged for review
+agents/factory/nodes/
