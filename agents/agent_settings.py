@@ -1,24 +1,12 @@
 import inspect
 import yaml
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from crewai import Agent, LLM
 from functools import cached_property
-
-from settings import Config as _DefaultConfig
+from settings import Config
 from common.result import Result, Ok, Err
 
-__all__ = ["SingleAgentFactory", "ConfigLike"]
-
-
-class ConfigLike(Protocol):
-    """The settings surface SingleAgentFactory depends on (injectable for tests)."""
-
-    MODEL: str
-    VERBOSE: bool
-
-    @property
-    def api_key(self) -> str | None: ...
 
 
 class SingleAgentFactory:
@@ -28,21 +16,12 @@ class SingleAgentFactory:
     singleton — pass a stub ConfigLike (and optionally a prebuilt LLM) in tests.
     """
 
-    def __init__(
-        self,
-        config_dir: Path,
-        config: ConfigLike | None = None,
-        llm: LLM | None = None,
-    ) -> None:
-        self._config: ConfigLike = config or _DefaultConfig
-        self._injected_llm = llm
+    def __init__(self, config_dir: Path) -> None:
         self._agents_config: dict[str, Any] = self._load_yaml(config_dir / "agents.yaml")
 
     @cached_property
     def llm(self) -> LLM:
-        if self._injected_llm is not None:
-            return self._injected_llm
-        return LLM(model=self._config.MODEL, api_key=self._config.api_key)
+        return LLM(model=Config.MODEL, api_key=Config.OPENAI_API_KEY or Config.ANTHROPIC_API_KEY)
 
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:
@@ -65,16 +44,11 @@ class SingleAgentFactory:
             return Err("inputs dict must contain a non-empty 'context' or 'query'")
         return Ok("\n\n".join(parts))
 
-    def run(
-        self,
-        agent_name: str,
-        inputs: str | dict[str, Any],
-        skills: list[str],
-    ) -> Result[str, str]:
+    def run(self, agent_name: str, inputs: str | dict[str, Any], skills: list[str]) -> Result[str, str]:
         if agent_name not in self._agents_config:
             return Err(f"unknown agent: {agent_name}")
 
-        if self._config.api_key is None:
+        if Config.OPENAI_API_KEY is None:
             return Err("no API key configured for the active provider")
 
         prompt = self._compose_prompt(inputs)
@@ -84,7 +58,7 @@ class SingleAgentFactory:
         agent = Agent(
             config=self._agents_config[agent_name],
             llm=self.llm,
-            verbose=self._config.VERBOSE,
+            verbose=Config.VERBOSE,
             skills=skills,
             max_rpm=10,
             respect_context_window=True,
