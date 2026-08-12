@@ -174,6 +174,12 @@ def _card_block(node: GraphNode, is_entry: bool, status: NodeStatus | None) -> B
     return block
 
 
+def _preview(text: str, limit: int = 28) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+
 def _card_rows(
     node: GraphNode, is_entry: bool, status: NodeStatus | None, *, loop: bool = False
 ) -> tuple[Span, list[Span], Span]:
@@ -183,21 +189,18 @@ def _card_rows(
     repeat = f" ×{node.repeat}" if node.repeat > 1 else ""
     loop_mark = " ↻" if loop else ""
     title = f"{glyph} {marker}{node.id}{repeat}{loop_mark}"
+    text = _preview(node.text)
     accent = color if status else (OH_MY_PI["cyan"] if is_entry else OH_MY_PI["slate"])
     border = hex_of(accent) + (" bold" if status or is_entry else "")
-    width = len(title) + len(node.ref) + 7  # "  {title}   {ref}  "
+    inner: list[Span] = [(title, hex_of(color) + " bold")]
+    if text:
+        inner.extend([("   ", None), (text, hex_of(OH_MY_PI["amber"]))])
+    inner.extend([("   ", None), (node.ref, "dim")])
+    width = sum(len(part) for part, _ in inner) + 4
 
     top: Span = ("╭" + "─" * width + "╮", border)
     bot: Span = ("╰" + "─" * width + "╯", border)
-    content: list[Span] = [
-        ("│", border),
-        ("  ", None),
-        (title, hex_of(color) + " bold"),
-        ("   ", None),
-        (node.ref, "dim"),
-        ("  ", None),
-        ("│", border),
-    ]
+    content: list[Span] = [("│", border), ("  ", None), *inner, ("  ", None), ("│", border)]
     return top, content, bot
 
 

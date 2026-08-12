@@ -13,8 +13,5 @@
     "start": "node index.js",
     "smoke": "node index.js --smoke",
     "test": "node --test tests/*.test.js"
-  },
-  "dependencies": {
-    "@oh-my-pi/pi-tui": "^17.2.15"
   }
 }

@@ -9,7 +9,7 @@ from rich.console import Console
 
 from common.result import Ok
 from discovery import NodeKind, scan
-from flows import EdgeKind, Flow, FlowNode, list_flows, save
+from flows import EdgeKind, Flow, FlowNode, save
 from tui.app import AgentCards, DeVinciApp, FlowsPanel
 
 

@@ -102,7 +102,7 @@ async def run_graph(
         outcome: Result[str, str] | None = None
         for _ in range(node.repeat):
             outcome = await asyncio.to_thread(
-                runner.run, resolved.value, _compose_inputs(goal, last_output)
+                runner.run, resolved.value, _compose_inputs(goal, last_output, node.prompt)
             )
             if isinstance(outcome, Err):
                 break
@@ -162,10 +162,12 @@ def _edge_of(node: GraphNode, kind: EdgeKind) -> Edge | None:
     return next((edge for edge in node.edges if edge.kind is kind), None)
 
 
-def _compose_inputs(goal: str, last_output: str | None) -> str:
+def _compose_inputs(goal: str, last_output: str | None, prompt: str = "") -> str:
     parts: list[str] = []
     if goal:
         parts.append(goal)
     if last_output:
         parts.append(f"[previous step output]\n{last_output}")
+    if prompt:
+        parts.append(f"[card prompt]\n{prompt}")
     return "\n\n".join(parts)

@@ -58,6 +58,8 @@ def build_graph_prompt(goal: str, catalog: Catalog) -> str:
         "taken. A node with a conditional MUST declare both on_true and on_false.\n"
         "- LOOP: to loop, point an on_false (or on_true) edge BACK to an earlier "
         "node — e.g. review on_false -> code. Loops are capped by 'max_visits'.\n\n"
+        "Node fields: 'text' is an optional visible card label; 'prompt' is "
+        "optional per-card guidance passed to that agent at runtime.\n\n"
         "Reply with ONE JSON object and nothing else:\n"
         "{\n"
         '  "name": "kebab-case-name",\n'
@@ -65,8 +67,8 @@ def build_graph_prompt(goal: str, catalog: Catalog) -> str:
         '  "entry": "id-of-first-node",\n'
         f'  "max_visits": {DEFAULT_MAX_VISITS},\n'
         '  "nodes": [\n'
-        '    {"id": "code", "ref": "<a key above>", "edges": [{"to": "review"}]},\n'
-        '    {"id": "review", "ref": "<a key above>", "edges": [\n'
+        '    {"id": "code", "ref": "<a key above>", "prompt": "implementation guidance", "edges": [{"to": "review"}]},\n'
+        '    {"id": "review", "ref": "<a key above>", "text": "review gate", "edges": [\n'
         '      {"to": "test", "kind": "on_true", "condition": "the work passes review"},\n'
         '      {"to": "code", "kind": "on_false", "condition": "the work passes review"}\n'
         "    ]}\n"

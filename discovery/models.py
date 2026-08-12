@@ -1,13 +1,10 @@
-"""Typed catalog models for discovered .claude nodes."""
-
-from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
 from common.result import Err, Ok, Result
 
-__all__ = ["NodeKind", "CatalogNode", "Diagnostic", "Catalog"]
+__all__ = ["Catalog", "CatalogNode", "Diagnostic", "NodeKind"]
 
 
 class NodeKind(str, Enum):
@@ -44,6 +41,7 @@ class CatalogNode:
 
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
+
     """A file that could not be parsed into a node — skipped, not fatal."""
 
     source: Path
@@ -52,10 +50,9 @@ class Diagnostic:
 
 @dataclass(slots=True)
 class Catalog:
-    """Discovered nodes plus diagnostics for the files that were skipped.
+    """Discovered nodes plus diagnostics for files skipped during scanning.
 
-    Nodes are keyed by (kind, name); the first-seen entry wins. The factory can
-    register a freshly generated bundle so it resolves in the same session.
+    Nodes are keyed by (kind, name); the first-seen entry wins.
     """
 
     _nodes: dict[str, CatalogNode] = field(default_factory=dict)
@@ -67,10 +64,6 @@ class Catalog:
             return False
         self._nodes[node.key] = node
         return True
-
-    def register(self, node: CatalogNode) -> None:
-        """Add or replace a node — used when the factory writes a new bundle."""
-        self._nodes[node.key] = node
 
     def find(self, kind: NodeKind, name: str) -> CatalogNode | None:
         return self._nodes.get(f"{kind.value}:{name}")

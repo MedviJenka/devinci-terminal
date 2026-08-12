@@ -13,7 +13,7 @@ from typing import Protocol, runtime_checkable
 from common.result import Err, Ok, Result
 from runtime.completion import Completion
 
-__all__ = ["Condition", "ClaudeCondition"]
+__all__ = ["ClaudeCondition", "Condition"]
 
 
 @runtime_checkable
@@ -49,8 +49,8 @@ def _parse_verdict(reply: str) -> Result[bool, str]:
     text = reply.strip().lower()
     starts_yes = text.startswith("yes")
     starts_no = text.startswith("no")
-    if starts_yes and not starts_no:
+    if starts_yes:
         return Ok(True)
-    if starts_no and not starts_yes:
+    if starts_no:
         return Ok(False)
     return Err(f"could not read a yes/no verdict from: {reply.strip()[:80]!r}")

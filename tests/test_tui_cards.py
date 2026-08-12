@@ -224,6 +224,40 @@ async def test_make_branch_via_app_builds_a_conditional(tmp_path: Path) -> None:
         assert EdgeKind.ON_TRUE in kinds and EdgeKind.ON_FALSE in kinds
 
 
+
+@pytest.mark.asyncio
+async def test_if_else_action_creates_branch_cards_from_agent_choices(
+    tmp_path: Path,
+) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:reviewer")
+        result = app.add_if_else_cards(
+            "reviewer",
+            condition="review passes",
+            if_ref="agent:coder",
+            else_ref="agent:reviewer",
+            if_text="if approved",
+            else_text="else revise",
+            if_prompt="implement the approved change",
+            else_prompt="explain why it failed",
+        )
+        assert isinstance(result, Ok)
+
+        builder = result.value
+        assert builder.node_ids == ("reviewer", "coder", "reviewer-2")
+        reviewer = next(n for n in builder.nodes if n.id == "reviewer")
+        by_kind = {e.kind: e for e in reviewer.edges}
+        assert by_kind[EdgeKind.ON_TRUE].to == "coder"
+        assert by_kind[EdgeKind.ON_FALSE].to == "reviewer-2"
+        assert by_kind[EdgeKind.ON_TRUE].condition == "review passes"
+        assert builder.nodes[1].text == "if approved"
+        assert builder.nodes[1].prompt == "implement the approved change"
+        assert builder.nodes[2].text == "else revise"
+        assert builder.nodes[2].prompt == "explain why it failed"
+
+
 @pytest.mark.asyncio
 async def test_adding_after_a_branch_node_adds_no_dead_next_edge(tmp_path: Path) -> None:
     app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")

@@ -87,6 +87,23 @@ def test_duplicate_ids_is_err() -> None:
 def test_node_repeat_defaults_to_one() -> None:
     assert GraphNode(id="a", ref="agent:a").repeat == 1
 
+def test_node_text_and_prompt_default_to_empty_strings() -> None:
+    node = GraphNode(id="a", ref="agent:a")
+    assert node.text == ""
+    assert node.prompt == ""
+
+
+def test_node_accepts_branch_card_text_and_optional_prompt() -> None:
+    node = GraphNode(
+        id="if-qa",
+        ref="agent:reviewer",
+        text="if the patch needs QA",
+        prompt="focus on regression risk",
+    )
+    assert node.text == "if the patch needs QA"
+    assert node.prompt == "focus on regression risk"
+
+
 
 def test_repeat_below_one_is_err() -> None:
     graph = Graph(

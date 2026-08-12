@@ -122,6 +122,35 @@ def test_branch_wires_both_conditional_edges() -> None:
     assert isinstance(branched.value.build(), Ok)
 
 
+def test_branch_to_new_cards_creates_if_else_nodes_with_text_and_prompt() -> None:
+    builder = GraphBuilder(name="ship", description="").add_node("agent:review").value
+    branched = builder.branch_to_new_cards(
+        "review",
+        "tests passed",
+        "agent:ship",
+        "agent:code",
+        true_text="ship when green",
+        false_text="fix when red",
+        true_prompt="write release notes",
+        false_prompt="patch failures",
+    )
+    assert isinstance(branched, Ok)
+
+    updated = branched.value
+    assert updated.node_ids == ("review", "ship", "code")
+    review = next(n for n in updated.nodes if n.id == "review")
+    by_kind = {e.kind: e for e in review.edges}
+    assert by_kind[EdgeKind.ON_TRUE].to == "ship"
+    assert by_kind[EdgeKind.ON_FALSE].to == "code"
+    assert by_kind[EdgeKind.ON_TRUE].condition == "tests passed"
+    assert updated.nodes[1].text == "ship when green"
+    assert updated.nodes[1].prompt == "write release notes"
+    assert updated.nodes[2].text == "fix when red"
+    assert updated.nodes[2].prompt == "patch failures"
+    assert isinstance(updated.build(), Ok)
+
+
+
 def test_branch_to_unknown_target_is_err() -> None:
     builder = GraphBuilder().add_node("agent:review").value
     assert isinstance(builder.branch("review", "ghost", "review", "ok"), Err)

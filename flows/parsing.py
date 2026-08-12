@@ -161,7 +161,25 @@ def _parse_graph_node(entry: Any, context: str, index: int) -> Result[GraphNode,
     if not isinstance(repeat, int) or isinstance(repeat, bool) or repeat < 1:
         return Err(f"{context} node '{node_id}' has a 'repeat' that is not an int ≥ 1")
 
-    return Ok(GraphNode(id=node_id, ref=ref, edges=tuple(edges), repeat=repeat))
+    text = entry.get("text", "")
+    if not isinstance(text, str):
+        return Err(f"{context} node '{node_id}' has a non-string 'text'")
+
+    prompt = entry.get("prompt", "")
+    if not isinstance(prompt, str):
+        return Err(f"{context} node '{node_id}' has a non-string 'prompt'")
+
+
+    return Ok(
+        GraphNode(
+            id=node_id,
+            ref=ref,
+            edges=tuple(edges),
+            repeat=repeat,
+            text=text,
+            prompt=prompt,
+        )
+    )
 
 
 def _parse_edge(

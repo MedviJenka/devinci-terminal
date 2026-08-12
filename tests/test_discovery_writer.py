@@ -12,8 +12,6 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-import yaml
-
 from common.result import Err, Ok
 from discovery.frontmatter import parse_frontmatter
 from discovery.models import CatalogNode, NodeKind

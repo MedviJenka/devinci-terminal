@@ -43,13 +43,19 @@ class Edge:
 
 @dataclass(frozen=True, slots=True)
 class GraphNode:
-    """One node: an id, the catalog ref it runs, its outgoing edges, and how many
-    times it runs in place (`repeat`, ≥ 1) before its edges are routed."""
+    """One executable card in a graph.
+
+    `text` is the card's visible branch/instruction label. `prompt` is optional
+    per-card guidance appended to the runner input. `repeat` is how many times the
+    node runs in place before its edges are routed.
+    """
 
     id: str
     ref: str
     edges: tuple[Edge, ...] = ()
     repeat: int = 1
+    text: str = ""
+    prompt: str = ""
 
 
 @dataclass(frozen=True, slots=True)

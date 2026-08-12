@@ -57,6 +57,30 @@ def test_conditional_node_forks_into_if_and_else() -> None:
     assert "test" in text and "code" in text
 
 
+def test_branch_cards_render_their_text() -> None:
+    graph = Graph(
+        name="branch",
+        description="",
+        entry="review",
+        nodes=(
+            GraphNode(
+                "review",
+                "agent:review",
+                edges=(
+                    Edge("ship", EdgeKind.ON_TRUE, "approved"),
+                    Edge("fix", EdgeKind.ON_FALSE, "approved"),
+                ),
+            ),
+            GraphNode("ship", "agent:ship", text="if approved"),
+            GraphNode("fix", "agent:fix", text="else revise"),
+        ),
+    )
+    text = _plain(render_blueprint(graph))
+    assert "if approved" in text
+    assert "else revise" in text
+
+
+
 def test_back_edge_branch_target_is_marked_as_a_loop() -> None:
     # review's else branch loops back to code (an earlier node) → ↻ on that card.
     text = _plain(render_blueprint(_loop_graph()))

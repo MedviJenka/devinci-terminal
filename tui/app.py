@@ -10,7 +10,7 @@ mock. Two verbs: type a goal to *create* a flow; select a flow to *run* it.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Group
@@ -21,7 +21,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Input, Label, OptionList, Static
+from textual.widgets import Button, Footer, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from common.result import Err, Ok, Result
@@ -75,6 +75,20 @@ def _truncate(text: str, limit: int) -> str:
     """Single-line preview of `text`, ellipsised past `limit` chars."""
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+
+@dataclass(frozen=True, slots=True)
+class IfElseSpec:
+    """Editor payload for creating two inline if/else branch cards."""
+
+    condition: str
+    if_ref: str
+    else_ref: str
+    if_text: str = ""
+    else_text: str = ""
+    if_prompt: str = ""
+    else_prompt: str = ""
 
 
 def _default_roots() -> tuple[Path, ...]:
@@ -290,31 +304,48 @@ class RepeatEditor(ModalScreen[int | None]):
         self.dismiss(None)
 
 
-class BranchEditor(ModalScreen[tuple[str, str, str] | None]):
-    """Make a node if/else: pick true/false targets and a NL condition."""
+class BranchEditor(ModalScreen[IfElseSpec | None]):
+    """Create if/else cards: each branch chooses an agent and optional prompt."""
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, node_id: str, node_ids: tuple[str, ...]) -> None:
+    def __init__(self, node_id: str, agents: tuple[CatalogNode, ...]) -> None:
         super().__init__()
         self._node_id = node_id
-        self._targets = ", ".join(node_ids)
+        self._agents = agents
 
     def compose(self) -> ComposeResult:
+        options = [(node.name, node.key) for node in self._agents]
+        first = options[0][1]
         with Vertical(id="editor"):
-            yield Label(f"If/else on '{self._node_id}'  (nodes: {self._targets})")
-            yield Input(placeholder="condition, e.g. 'tests passed'", id="cond")
-            yield Input(placeholder="on TRUE → node id", id="true")
-            yield Input(placeholder="on FALSE → node id", id="false")
+            yield Label(f"If/else after '{self._node_id}'")
+            yield Input(placeholder="condition text, e.g. 'tests passed'", id="cond")
+            yield Input(placeholder="IF card text", id="if-text")
+            yield Select(options, prompt="IF agent", allow_blank=False, value=first, id="if-agent")
+            yield Input(placeholder="IF prompt (optional)", id="if-prompt")
+            yield Input(placeholder="ELSE card text", id="else-text")
+            yield Select(
+                options, prompt="ELSE agent", allow_blank=False, value=first, id="else-agent"
+            )
+            yield Input(placeholder="ELSE prompt (optional)", id="else-prompt")
             with Horizontal(id="editor-buttons"):
-                yield Button("Wire", variant="primary", id="wire")
+                yield Button("Create cards", variant="primary", id="wire")
                 yield Button("Cancel", id="cancel")
 
-    def _spec(self) -> tuple[str, str, str] | None:
-        cond = self.query_one("#cond", Input).value.strip()
-        true_to = self.query_one("#true", Input).value.strip()
-        false_to = self.query_one("#false", Input).value.strip()
-        return (true_to, false_to, cond) if true_to and false_to else None
+    def _spec(self) -> IfElseSpec | None:
+        if_ref = self.query_one("#if-agent", Select).value
+        else_ref = self.query_one("#else-agent", Select).value
+        if not isinstance(if_ref, str) or not isinstance(else_ref, str):
+            return None
+        return IfElseSpec(
+            condition=self.query_one("#cond", Input).value.strip(),
+            if_ref=if_ref,
+            else_ref=else_ref,
+            if_text=self.query_one("#if-text", Input).value.strip(),
+            else_text=self.query_one("#else-text", Input).value.strip(),
+            if_prompt=self.query_one("#if-prompt", Input).value.strip(),
+            else_prompt=self.query_one("#else-prompt", Input).value.strip(),
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(self._spec() if event.button.id == "wire" else None)
@@ -583,6 +614,43 @@ class DeVinciApp(App[None]):
         self._render_builder()
         return branched
 
+    def add_if_else_cards(
+        self,
+        from_id: str,
+        *,
+        condition: str,
+        if_ref: str,
+        else_ref: str,
+        if_text: str = "",
+        else_text: str = "",
+        if_prompt: str = "",
+        else_prompt: str = "",
+    ) -> Result[GraphBuilder, str]:
+        """Create two branch cards from selected agents and route `from_id` to them."""
+        for label, ref in (("IF", if_ref), ("ELSE", else_ref)):
+            resolved = self._catalog.resolve(ref)
+            if isinstance(resolved, Err):
+                return Err(f"{label} agent: {resolved.error}")
+
+        branched = self._builder.branch_to_new_cards(
+            from_id,
+            condition,
+            if_ref,
+            else_ref,
+            true_text=if_text,
+            false_text=else_text,
+            true_prompt=if_prompt,
+            false_prompt=else_prompt,
+        )
+        if isinstance(branched, Err):
+            return branched
+        self._builder = branched.value
+        self._builder_status = {}
+        self._cursor = self._builder.node_ids[-1]
+        self._render_builder()
+        return branched
+
+
     def _cursor_step(self, delta: int) -> None:
         ids = self._builder.node_ids
         if not ids:
@@ -616,15 +684,25 @@ class DeVinciApp(App[None]):
         if self._cursor is None:
             self.notify("add or select a node first", severity="warning")
             return
-        self.push_screen(
-            BranchEditor(self._cursor, self._builder.node_ids), self._on_branch_closed
-        )
+        agents = self._catalog.of_kind(NodeKind.AGENT)
+        if not agents:
+            self.notify("discover an agent before creating if/else", severity="warning")
+            return
+        self.push_screen(BranchEditor(self._cursor, agents), self._on_branch_closed)
 
-    def _on_branch_closed(self, spec: tuple[str, str, str] | None) -> None:
+    def _on_branch_closed(self, spec: IfElseSpec | None) -> None:
         if spec is None or self._cursor is None:
             return
-        true_to, false_to, condition = spec
-        result = self.make_branch(self._cursor, true_to, false_to, condition)
+        result = self.add_if_else_cards(
+            self._cursor,
+            condition=spec.condition,
+            if_ref=spec.if_ref,
+            else_ref=spec.else_ref,
+            if_text=spec.if_text,
+            else_text=spec.else_text,
+            if_prompt=spec.if_prompt,
+            else_prompt=spec.else_prompt,
+        )
         if isinstance(result, Err):
             self.notify(result.error, title="If/else failed", severity="error")
 

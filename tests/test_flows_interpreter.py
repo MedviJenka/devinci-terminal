@@ -36,9 +36,11 @@ class FakeRunner:
     def __init__(self, fail: set[str] | None = None) -> None:
         self._fail = fail or set()
         self.calls: list[str] = []
+        self.inputs: list[tuple[str, str]] = []
 
     def run(self, node: CatalogNode, inputs: str) -> Result[str, str]:
         self.calls.append(node.name)
+        self.inputs.append((node.name, inputs))
         if node.name in self._fail:
             return Err(f"{node.name} boom")
         return Ok(f"out:{node.name}")
@@ -191,6 +193,25 @@ async def test_repeat_runs_a_node_in_place_n_times() -> None:
     # It is still one node visit, not three (repeat is in-place, not a loop).
     assert report.visits["a"] == 1
     assert report.path == ("a", "b")
+
+
+@pytest.mark.asyncio
+async def test_node_prompt_is_included_in_runner_inputs() -> None:
+    graph = Graph(
+        name="prompted",
+        description="ship the feature",
+        entry="review",
+        nodes=(GraphNode("review", "agent:review", prompt="focus on regression risk"),),
+    )
+    runner = FakeRunner()
+    result = await run_graph(
+        graph, _catalog("review"), runner, FakeCondition([]), goal="ship the feature"
+    )
+
+    assert isinstance(result, Ok)
+    assert "ship the feature" in runner.inputs[0][1]
+    assert "focus on regression risk" in runner.inputs[0][1]
+
 
 
 @pytest.mark.asyncio

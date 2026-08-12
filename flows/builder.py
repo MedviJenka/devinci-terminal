@@ -34,11 +34,18 @@ class GraphBuilder:
     def node_ids(self) -> tuple[str, ...]:
         return tuple(node.id for node in self.nodes)
 
-    def add_node(self, ref: str, node_id: str | None = None) -> Result[GraphBuilder, str]:
+    def add_node(
+        self,
+        ref: str,
+        node_id: str | None = None,
+        *,
+        text: str = "",
+        prompt: str = "",
+    ) -> Result[GraphBuilder, str]:
         """Append a node running `ref`; the first node added becomes the entry.
 
-        `node_id` defaults to a unique id derived from `ref`. An explicit id that
-        already exists is an error.
+        `node_id` defaults to a unique id derived from `ref`. `text` is the card
+        label; `prompt` is optional guidance sent when the node runs.
         """
         if not ref:
             return Err("node ref must not be empty")
@@ -52,7 +59,9 @@ class GraphBuilder:
             if new_id is None:
                 return Err(f"could not derive a unique id from ref '{ref}'")
 
-        nodes = self.nodes + (GraphNode(id=new_id, ref=ref),)
+        nodes = self.nodes + (
+            GraphNode(id=new_id, ref=ref, text=text, prompt=prompt),
+        )
         entry = self.entry or new_id
         return Ok(replace(self, nodes=nodes, entry=entry))
 
@@ -111,6 +120,37 @@ class GraphBuilder:
             for node in self.nodes
         )
         return Ok(replace(self, nodes=nodes))
+
+    def branch_to_new_cards(
+        self,
+        from_id: str,
+        condition: str,
+        true_ref: str,
+        false_ref: str,
+        *,
+        true_text: str = "",
+        false_text: str = "",
+        true_prompt: str = "",
+        false_prompt: str = "",
+    ) -> Result[GraphBuilder, str]:
+        """Create if/else branch cards and route `from_id` to those new nodes."""
+        if from_id not in set(self.node_ids):
+            return Err(f"branch from target '{from_id}' is not a node")
+
+        with_true = self.add_node(true_ref, text=true_text, prompt=true_prompt)
+        if isinstance(with_true, Err):
+            return with_true
+        true_id = with_true.value.node_ids[-1]
+
+        with_false = with_true.value.add_node(
+            false_ref, text=false_text, prompt=false_prompt
+        )
+        if isinstance(with_false, Err):
+            return with_false
+        false_id = with_false.value.node_ids[-1]
+
+        return with_false.value.branch(from_id, true_id, false_id, condition)
+
 
     def remove_node(self, node_id: str) -> Result[GraphBuilder, str]:
         """Drop a node and every edge pointing at it; reassign entry if needed."""
