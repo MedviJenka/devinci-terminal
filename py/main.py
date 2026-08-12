@@ -1,5 +1,10 @@
-def main():
-    print("Hello from py!")
+"""Entry point — launch the DeVinci orchestration terminal."""
+
+from tui import run
+
+
+def main() -> None:
+    run()
 
 
 if __name__ == "__main__":
