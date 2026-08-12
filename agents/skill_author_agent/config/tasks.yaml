@@ -1,0 +1,8 @@
+create_skill_task:
+  agent: skill_author
+  description: >
+    Based on this capability, write output/skill.md as a complete SKILL.md:
+    {description}
+  expected_output: valid Claude Code SKILL.md file
+  markdown: true
+  output_file: .output/skill.md

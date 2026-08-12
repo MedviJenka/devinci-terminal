@@ -1,4 +1,5 @@
-"""The oh-my-pi aesthetic — neon palette + gradient text, ported to Rich/Textual.
+"""
+The oh-my-pi aesthetic — neon palette + gradient text, ported to Rich/Textual.
 
 The palette and per-character linear-interpolation gradient mirror the original
 `OH_MY_PI` / `gradient()` from index.js, so the Python TUI keeps the same
@@ -7,13 +8,13 @@ cyan → violet → pink → lime → amber look. `gradient_text` accepts an ani
 a timer to make the banner shimmer.
 """
 
-from __future__ import annotations
-
 from rich.color import Color
 from rich.style import Style
 from rich.text import Text
 
+
 __all__ = ["OH_MY_PI", "BRAND_STOPS", "gradient_text", "hex_of"]
+
 
 # RGB triples, identical to the OH_MY_PI palette in index.js.
 OH_MY_PI: dict[str, tuple[int, int, int]] = {
@@ -56,13 +57,7 @@ def _sample(stops: tuple[tuple[int, int, int], ...], t: float) -> tuple[int, int
     return tuple(round(a[c] + (b[c] - a[c]) * frac) for c in range(3))  # type: ignore[return-value]
 
 
-def gradient_text(
-    text: str,
-    stops: tuple[tuple[int, int, int], ...] = BRAND_STOPS,
-    *,
-    phase: float = 0.0,
-    bold: bool = False,
-) -> Text:
+def gradient_text(text: str, stops: tuple = BRAND_STOPS, *, phase: float = 0.0, bold: bool = False) -> Text:
     """Return a Rich Text whose characters flow through `stops`.
 
     `phase` shifts the sampling window (animate it for a moving shimmer); spaces
@@ -71,6 +66,7 @@ def gradient_text(
     chars = list(text)
     span = max(1, len(chars) - 1)
     out = Text()
+
     for index, char in enumerate(chars):
         if char == " ":
             out.append(" ")
@@ -78,4 +74,5 @@ def gradient_text(
         t = (index / span) + phase
         r, g, b = _sample(stops, t)
         out.append(char, Style(color=Color.from_rgb(r, g, b), bold=bold))
+
     return out

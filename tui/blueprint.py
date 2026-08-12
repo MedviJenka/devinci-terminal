@@ -1,4 +1,5 @@
-"""Blueprint canvas — draws a control-flow Graph as a horizontal card strip.
+"""
+Blueprint canvas — draws a control-flow Graph as a horizontal card strip.
 
 Pure rendering: given a `Graph` (and optionally a live `{node_id: NodeStatus}`
 map), build a Rich renderable laid out left-to-right — each node is a rounded
@@ -15,14 +16,14 @@ mirrors the builder's linear-with-a-terminal-branch shape, not an arbitrary DAG.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
-from rich.console import Group
+from typing import Optional
 from rich.text import Text
-
+from rich.console import Group
+from collections.abc import Iterable
 from flows.executor import NodeStatus
-from flows.graph import Edge, EdgeKind, Graph, GraphNode
 from tui.theme import OH_MY_PI, hex_of
+from flows.graph import Edge, EdgeKind, Graph, GraphNode
+
 
 __all__ = ["render_blueprint"]
 
@@ -33,12 +34,16 @@ _STATUS_STYLE: dict[NodeStatus, tuple[str, tuple[int, int, int]]] = {
     NodeStatus.FAILED: ("✗", OH_MY_PI["red"]),
     NodeStatus.SKIPPED: ("◌", OH_MY_PI["slate"]),
 }
+
 _PENDING_STYLE: tuple[str, tuple[int, int, int]] = ("◌", OH_MY_PI["slate"])
 
 # Palette styles reused across the canvas.
 _WIRE = hex_of(OH_MY_PI["violet"])
+
 _LOOP = hex_of(OH_MY_PI["pink"]) + " bold"
+
 _IF = hex_of(OH_MY_PI["lime"]) + " bold"
+
 _ELSE = hex_of(OH_MY_PI["amber"]) + " bold"
 
 # The canvas is 7 rows tall; the linear strip sits on the center band (rows 2-4),
@@ -52,9 +57,7 @@ Span = tuple[str, str | None]
 Block = list[list[Span]]
 
 
-def render_blueprint(
-    graph: Graph, statuses: dict[str, NodeStatus] | None = None
-) -> object:
+def render_blueprint(graph: Graph, statuses: dict[str, Optional[NodeStatus]] = None) -> object:
     """Render `graph` as node cards that wrap cleanly to the available width.
 
     `statuses` lights each card with its live status glyph/colour; omitted nodes
@@ -67,6 +70,7 @@ def render_blueprint(
 
 
 class _BlueprintCanvas:
+
     """Rich renderable that packs blueprint blocks to the current console width."""
 
     def __init__(self, graph: Graph, live: dict[str, NodeStatus]) -> None:
@@ -99,6 +103,7 @@ def _blueprint_units(graph: Graph, live: dict[str, NodeStatus]) -> list[list[Blo
             pending = None
 
         branch = _branch_edges(node)
+
         if branch is not None:
             on_true, on_false = branch
             loops_back = order.get(on_false.to, index) < index
@@ -111,13 +116,14 @@ def _blueprint_units(graph: Graph, live: dict[str, NodeStatus]) -> list[list[Blo
             break
 
         nxt = _next_edge(node)
-        if nxt is None:
-            break
+
+        if nxt is None: break
         looping = node.repeat > 1 or order.get(nxt.to, index) <= index
         pending = _connector_block(looping)
 
     if pending is not None:
         units.append([pending])
+
     return units
 
 

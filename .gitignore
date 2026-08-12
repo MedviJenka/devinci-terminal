@@ -26,4 +26,4 @@ wheels/
 .venv
 
 # Factory output — generated node bundles staged for review
-agents/factory/nodes/
+agents/command_agent/nodes/

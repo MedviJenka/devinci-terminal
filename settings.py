@@ -18,4 +18,11 @@ def load_config() -> _Config:
     return _Config()
 
 
-Config = load_config()
+class _ConfigProxy:
+    """Lazy settings proxy so importing modules does not require API keys."""
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(load_config(), name)
+
+
+Config = _ConfigProxy()

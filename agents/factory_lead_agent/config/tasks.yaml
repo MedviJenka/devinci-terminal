@@ -1,0 +1,8 @@
+create_agent_task:
+  agent: factory_lead
+  description: >
+    Based on this capability plus its skill/tool specs, write output/agent.md:
+    {description}
+  expected_output: valid Claude Code agent .md with validation section
+  markdown: true
+  output_file: .output/agent.md

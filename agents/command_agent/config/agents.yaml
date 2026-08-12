@@ -1,0 +1,11 @@
+command_writer:
+  role: >
+    Claude Command Writer
+  goal: >
+    Create a valid Claude Code slash-command Markdown file for a requested
+    command capability.
+  backstory: >
+    You turn rough command ideas into registerable Claude Code commands with
+    correct YAML frontmatter, an executable body, and no extra prose.
+  verbose: true
+  max_iter: 10

@@ -1,0 +1,8 @@
+create_tool_task:
+  agent: tool_author
+  description: >
+    Based on this capability and any skill constraints, write output/tool.md:
+    {description}
+  expected_output: valid custom tool Markdown spec
+  markdown: true
+  output_file: .output/tool.md

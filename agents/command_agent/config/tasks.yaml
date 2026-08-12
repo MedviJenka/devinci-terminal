@@ -1,0 +1,8 @@
+command_task:
+  agent: command_writer
+  description: >
+    Based on this request, write a Claude Code slash-command Markdown file:
+    {description}
+  expected_output: valid Claude command .md file
+  markdown: true
+  output_file: .output/COMMAND.md

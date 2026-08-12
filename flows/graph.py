@@ -1,4 +1,5 @@
-"""Control-flow graph model — the evolution of Flow that supports loops + branches.
+"""
+Control-flow graph model — the evolution of Flow that supports loops + branches.
 
 A Graph is a directed graph whose edges are typed: NEXT for plain sequence, and
 ON_TRUE / ON_FALSE for a conditional whose branch is chosen at runtime by judging
@@ -11,14 +12,13 @@ exists, ids are unique, and a conditional node declares both branches. It return
 a Result and never raises.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass, field
 from enum import Enum
-
+from dataclasses import dataclass, field
 from common.result import Err, Ok, Result
 
+
 __all__ = ["EdgeKind", "Edge", "GraphNode", "Graph", "validate_graph"]
+
 
 # Default hard cap on how many times any single node may execute in one run.
 DEFAULT_MAX_VISITS = 5
@@ -60,6 +60,7 @@ class GraphNode:
 
 @dataclass(frozen=True, slots=True)
 class Graph:
+
     """A named control-flow graph with an explicit entry and a loop-visit cap."""
 
     name: str
