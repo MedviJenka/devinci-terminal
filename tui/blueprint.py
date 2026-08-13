@@ -6,12 +6,17 @@ map), build a Rich renderable laid out left-to-right — each node is a rounded
 card (its id + dim ref), consecutive cards are joined by a labeled connector, a
 repeating/back-edge node carries a `↻ loop` connector, and a conditional node
 fans into two branches whose *target nodes are drawn as cards*: the `(if)` target
-up-right, the `(else)` target down-right off a center junction. Never raises.
+up-right, the `(else)` target down-right off a center junction. Each branch then
+keeps drawing its own NEXT-chain in its band — cards added onto an if/else card
+(by moving the cursor onto it) render alongside it, not just in the node count.
+Never raises.
 
 The canvas is a fixed grid of rows built block-by-block (card, connector, fork);
 fork-free graphs occupy the center band and are trimmed back to three rows. The
-strip walks `graph.nodes` order until a node forks or has no successor — it
-mirrors the builder's linear-with-a-terminal-branch shape, not an arbitrary DAG.
+main strip walks `graph.nodes` order until a node forks or has no successor, and
+each branch band does the same starting from its target — one fork deep only; a
+branch card that itself forks again is flagged `⋯` rather than drawn, so this is
+a linear-with-one-branch-of-linear-branches shape, not an arbitrary DAG.
 """
 
 from __future__ import annotations
@@ -51,6 +56,11 @@ _ELSE = hex_of(OH_MY_PI["amber"]) + " bold"
 _ROWS = 7
 _CENTER_TOP = 2
 _JUNCTION = 3  # dashes before the fork's ┤, also the branch-label indent
+
+# A branch band is one atomic unit the wrap pass can't break internally (unlike
+# the main strip, made of many small units) — cap how many cards it chains
+# before flagging the rest with `⋯` instead of running off the terminal edge.
+_MAX_BAND_CHAIN = 3
 
 # A styled span and a full row of spans, the unit blocks are emitted in.
 Span = tuple[str, str | None]
@@ -106,11 +116,14 @@ def _blueprint_units(graph: Graph, live: dict[str, NodeStatus]) -> list[list[Blo
 
         if branch is not None:
             on_true, on_false = branch
-            loops_back = order.get(on_false.to, index) < index
+            true_loops = order.get(on_true.to, index) < index
+            false_loops = order.get(on_false.to, index) < index
             units.append(
                 [
                     _spine_block(),
-                    _branch_cards_block(graph, live, on_true.to, on_false.to, loops_back),
+                    _branch_cards_block(
+                        graph, live, order, on_true.to, on_false.to, true_loops, false_loops
+                    ),
                 ]
             )
             break
@@ -235,35 +248,87 @@ def _spine_block() -> Block:
 def _branch_cards_block(
     graph: Graph,
     live: dict[str, NodeStatus],
+    order: dict[str, int],
     if_ref: str,
     else_ref: str,
-    loops_back: bool,
+    if_loops: bool,
+    else_loops: bool,
 ) -> Block:
-    """Both branch targets as cards — (if) on the upper band, (else) on the lower.
+    """Both branch targets as card chains — (if) on the upper band, (else) on the
+    lower. Each target keeps its own NEXT-chain drawn alongside it (cards added
+    off a branch via the cursor), so growing a branch doesn't just raise the node
+    count invisibly — it shows up.
 
-    Emitted as one block so both cards share a left edge (padded to equal width).
+    Emitted as one block so both chains share a left edge (padded to equal width).
     """
     block: Block = [[] for _ in range(_ROWS)]
-    _place_card(block, graph, live, if_ref, band=0)
-    _place_card(block, graph, live, else_ref, band=4, loop=loops_back)
+    _place_chain(block, graph, live, order, if_ref, band=0, loops=if_loops)
+    _place_chain(block, graph, live, order, else_ref, band=4, loops=else_loops)
     return block
 
 
-def _place_card(
+def _place_chain(
     block: Block,
     graph: Graph,
     live: dict[str, NodeStatus],
-    ref: str,
+    order: dict[str, int],
+    start_ref: str,
     *,
     band: int,
-    loop: bool = False,
+    loops: bool,
 ) -> None:
-    """Write a branch target's card into `block` at a 3-row band (0-2 up, 4-6 down)."""
-    node = graph.by_id(ref) or GraphNode(id=ref, ref="")
-    top, content, bot = _card_rows(node, node.id == graph.entry, live.get(ref), loop=loop)
-    block[band] = [top]
-    block[band + 1] = content
-    block[band + 2] = [bot]
+    """Write a branch target's card into `block` at a 3-row band (0-2 up, 4-6 down),
+    then keep walking its NEXT-chain in the same band — cards chained onto a
+    branch (by moving the cursor onto its card and adding more) render right
+    alongside it instead of vanishing.
+
+    Stops at a dead end, a node that itself forks (the canvas is one fork deep —
+    a nested branch is flagged with `⋯` rather than drawn), or a back-edge to an
+    earlier node (shown as a `↻ loop` connector, matching the main strip).
+    A branch target that is itself a loop-back (`loops`) is drawn once, unchained
+    — walking forward from it would only replay the graph already drawn above it.
+    """
+    top_row: list[Span] = []
+    mid_row: list[Span] = []
+    bot_row: list[Span] = []
+
+    node = graph.by_id(start_ref) or GraphNode(id=start_ref, ref="")
+    top, content, bot = _card_rows(node, node.id == graph.entry, live.get(start_ref), loop=loops)
+    top_row.append(top)
+    mid_row.extend(content)
+    bot_row.append(bot)
+
+    index = order.get(start_ref)
+    placed = 1
+    while not loops and index is not None:
+        if _branch_edges(node) is not None:
+            mid_row.append((" ⋯", "dim"))
+            break
+        nxt = _next_edge(node)
+        if nxt is None:
+            break
+        if placed >= _MAX_BAND_CHAIN:
+            # A band is one atomic, unwrappable unit (unlike the main strip, which
+            # wraps between units) — cap it and say so, rather than silently
+            # truncating an over-wide line off the edge of the terminal.
+            mid_row.append((" ⋯", "dim"))
+            break
+        target_index = order.get(nxt.to, index)
+        if target_index <= index:
+            mid_row.extend([(" ──", _WIRE), (" ↻ loop ", _LOOP), ("──▸ ", _WIRE)])
+            break
+        mid_row.append((" ─────▸ ", _WIRE))
+        index = target_index
+        node = graph.nodes[index]
+        top, content, bot = _card_rows(node, node.id == graph.entry, live.get(node.id))
+        top_row.append(top)
+        mid_row.extend(content)
+        placed += 1
+        bot_row.append(bot)
+
+    block[band] = top_row
+    block[band + 1] = mid_row
+    block[band + 2] = bot_row
 
 
 def _trim(rows: list[Text]) -> list[Text]:

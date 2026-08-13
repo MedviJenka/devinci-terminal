@@ -155,3 +155,115 @@ def test_many_linear_nodes_wrap_between_cards_in_narrow_terminals() -> None:
 def test_empty_graph_renders_placeholder() -> None:
     graph = Graph(name="empty", description="", entry="", nodes=())
     assert "empty" in _plain(render_blueprint(graph)).lower()
+
+
+def test_node_chained_onto_an_if_card_is_rendered() -> None:
+    # Regression: a card added onto the (if) branch (cursor moved to "ship", then
+    # chained) used to raise the node count but never appear on the canvas — the
+    # renderer stopped drawing at the fork entirely. It must show up in the (if) band.
+    graph = Graph(
+        name="branch",
+        description="",
+        entry="review",
+        nodes=(
+            GraphNode(
+                "review",
+                "agent:review",
+                edges=(
+                    Edge("ship", EdgeKind.ON_TRUE, "approved"),
+                    Edge("fix", EdgeKind.ON_FALSE, "approved"),
+                ),
+            ),
+            GraphNode("ship", "agent:ship", edges=(Edge(to="deploy"),)),
+            GraphNode("fix", "agent:fix"),
+            GraphNode("deploy", "agent:deploy"),
+        ),
+    )
+    text = _plain(render_blueprint(graph))
+    assert "(if)" in text and "(else)" in text
+    for token in ("ship", "fix", "deploy"):
+        assert token in text
+
+
+def test_node_chained_onto_an_else_card_is_rendered() -> None:
+    # Same regression, mirrored onto the (else) branch.
+    graph = Graph(
+        name="branch",
+        description="",
+        entry="review",
+        nodes=(
+            GraphNode(
+                "review",
+                "agent:review",
+                edges=(
+                    Edge("ship", EdgeKind.ON_TRUE, "approved"),
+                    Edge("fix", EdgeKind.ON_FALSE, "approved"),
+                ),
+            ),
+            GraphNode("ship", "agent:ship"),
+            GraphNode("fix", "agent:fix", edges=(Edge(to="notify"),)),
+            GraphNode("notify", "agent:notify"),
+        ),
+    )
+    text = _plain(render_blueprint(graph))
+    for token in ("ship", "fix", "notify"):
+        assert token in text
+
+
+def test_chain_off_a_branch_stops_at_a_nested_fork_with_a_hint() -> None:
+    # A branch card that itself forks again can't be drawn (one fork deep only) —
+    # it should stop cleanly with a visible hint instead of raising or vanishing.
+    graph = Graph(
+        name="branch",
+        description="",
+        entry="review",
+        nodes=(
+            GraphNode(
+                "review",
+                "agent:review",
+                edges=(
+                    Edge("ship", EdgeKind.ON_TRUE, "approved"),
+                    Edge("fix", EdgeKind.ON_FALSE, "approved"),
+                ),
+            ),
+            GraphNode(
+                "ship",
+                "agent:ship",
+                edges=(
+                    Edge("notify", EdgeKind.ON_TRUE, "notified"),
+                    Edge("skip", EdgeKind.ON_FALSE, "notified"),
+                ),
+            ),
+            GraphNode("fix", "agent:fix"),
+            GraphNode("notify", "agent:notify"),
+            GraphNode("skip", "agent:skip"),
+        ),
+    )
+    text = _plain(render_blueprint(graph))
+    assert "ship" in text
+    assert "⋯" in text
+    assert "notify" not in text  # the nested branch itself isn't drawn
+
+
+def test_long_chain_off_a_branch_is_capped_with_a_visible_hint() -> None:
+    # A branch band is one atomic unit the wrap pass can't split internally (unlike
+    # the main strip). An unbounded chain there would just run off the terminal
+    # edge unannounced — the same "data silently missing" failure as the original
+    # bug, just relocated. It must cap and say so instead.
+    edges = tuple(Edge(to=f"e{i + 1}") for i in range(4))
+    nodes = (
+        GraphNode(
+            "review",
+            "agent:review",
+            edges=(Edge("ship", EdgeKind.ON_TRUE, "ok"), Edge("e0", EdgeKind.ON_FALSE, "ok")),
+        ),
+        GraphNode("ship", "agent:ship"),
+    ) + tuple(
+        GraphNode(f"e{i}", f"agent:e{i}", edges=(edges[i],) if i < 4 else ())
+        for i in range(5)
+    )
+    graph = Graph(name="branch", description="", entry="review", nodes=nodes)
+
+    text = _plain(render_blueprint(graph), width=200)
+    assert "⋯" in text
+    assert "e4" not in text  # beyond the cap — flagged, not silently rendered

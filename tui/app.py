@@ -218,6 +218,21 @@ class RunPanel(Static):
         return Group(table)
 
 
+def _branch_role(builder: GraphBuilder | None, node_id: str | None) -> str | None:
+    """'if' or 'else' when `node_id` is a branch target in `builder`, else None."""
+    if builder is None or node_id is None:
+        return None
+    for node in builder.nodes:
+        for edge in node.edges:
+            if edge.to != node_id:
+                continue
+            if edge.kind is EdgeKind.ON_TRUE:
+                return "if"
+            if edge.kind is EdgeKind.ON_FALSE:
+                return "else"
+    return None
+
+
 class GraphBuilderPanel(Static):
     """The control-flow graph being assembled by hand from agent cards."""
 
@@ -239,7 +254,7 @@ class GraphBuilderPanel(Static):
             return Group(
                 Text(
                     "pick an agent card (Enter) to add a node · [ ] move cursor · "
-                    "l loop ×N · b if/else · s save+export · x save+run",
+                    "l loop ×N · b if/else · f flip if/else · s save+export · x save+run",
                     style="dim italic",
                 )
             )
@@ -251,6 +266,9 @@ class GraphBuilderPanel(Static):
         )
         header = Text("current ▸ ", style="dim")
         header.append(cursor or "—", style=hex_of(OH_MY_PI["pink"]) + " bold")
+        role = _branch_role(builder, cursor)
+        if role is not None:
+            header.append(f"  ({role} card — f to flip)", style="dim italic")
         return Group(header, render_blueprint(display, statuses))
 
 
@@ -355,32 +373,49 @@ class NameEditor(ModalScreen[str | None]):
 
 
 class BranchEditor(ModalScreen[IfElseSpec | None]):
-    """Create if/else cards: each branch chooses an agent and optional prompt."""
+    """Create if/else cards: each branch picks a catalog node (agent/skill/command)
+    and an optional prompt. No card-text field — plain card-adds don't ask for one
+    either (see `add_node_from_card`), so branches shouldn't need it.
+    """
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, node_id: str, agents: tuple[CatalogNode, ...]) -> None:
+    def __init__(self, node_id: str, choices: tuple[CatalogNode, ...]) -> None:
         super().__init__()
         self._node_id = node_id
-        self._agents = agents
+        # NB: not named `_nodes` — Textual's Widget/DOMNode already owns that
+        # attribute for its child NodeList; shadowing it corrupts mounting.
+        self._choices = choices
+        self._by_key = {node.key: node for node in choices}
 
     def compose(self) -> ComposeResult:
-        options = [(node.name, node.key) for node in self._agents]
+        options = [(f"{node.name}  ·  {node.kind.value}", node.key) for node in self._choices]
         first = options[0][1]
         with Vertical(id="editor"):
             yield Label(f"If/else after '{self._node_id}'")
             yield Input(placeholder="condition text, e.g. 'tests passed'", id="cond")
-            yield Input(placeholder="IF card text", id="if-text")
-            yield Select(options, prompt="IF agent", allow_blank=False, value=first, id="if-agent")
+            yield Select(options, prompt="IF node", allow_blank=False, value=first, id="if-agent")
+            yield Static(self._tools_line(first), id="if-tools", classes="tools-line")
             yield Input(placeholder="IF prompt (optional)", id="if-prompt")
-            yield Input(placeholder="ELSE card text", id="else-text")
             yield Select(
-                options, prompt="ELSE agent", allow_blank=False, value=first, id="else-agent"
+                options, prompt="ELSE node", allow_blank=False, value=first, id="else-agent"
             )
+            yield Static(self._tools_line(first), id="else-tools", classes="tools-line")
             yield Input(placeholder="ELSE prompt (optional)", id="else-prompt")
             with Horizontal(id="editor-buttons"):
                 yield Button("Create cards", variant="primary", id="wire")
                 yield Button("Cancel", id="cancel")
+
+    def _tools_line(self, key: object) -> str:
+        node = self._by_key.get(key) if isinstance(key, str) else None
+        if node is None:
+            return ""
+        return f"tools: {', '.join(node.tools)}" if node.tools else "tools: (none listed)"
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        target = {"if-agent": "if-tools", "else-agent": "else-tools"}.get(event.select.id or "")
+        if target is not None:
+            self.query_one(f"#{target}", Static).update(self._tools_line(event.value))
 
     def _spec(self) -> IfElseSpec | None:
         if_ref = self.query_one("#if-agent", Select).value
@@ -391,8 +426,6 @@ class BranchEditor(ModalScreen[IfElseSpec | None]):
             condition=self.query_one("#cond", Input).value.strip(),
             if_ref=if_ref,
             else_ref=else_ref,
-            if_text=self.query_one("#if-text", Input).value.strip(),
-            else_text=self.query_one("#else-text", Input).value.strip(),
             if_prompt=self.query_one("#if-prompt", Input).value.strip(),
             else_prompt=self.query_one("#else-prompt", Input).value.strip(),
         )
@@ -482,6 +515,7 @@ class DeVinciApp(App[None]):
     #editor Input:focus { border: round $goal; }
     #editor-buttons { height: auto; align: right middle; }
     #editor-buttons Button { margin: 0 1; }
+    #editor .tools-line { color: $muted; height: auto; margin: 0 0 1 1; }
     """
 
     BINDINGS = [
@@ -491,6 +525,7 @@ class DeVinciApp(App[None]):
         ("right_square_bracket", "cursor_next", "node ▸"),
         ("l", "loop_node", "Loop ×N"),
         ("b", "branch_node", "If/else"),
+        ("f", "flip_branch", "Flip if/else"),
         ("d", "delete_node", "Delete node"),
         ("s", "save_builder", "Save + export"),
         ("x", "run_builder", "Save + run"),
@@ -789,6 +824,37 @@ class DeVinciApp(App[None]):
     def action_cursor_next(self) -> None:
         self._cursor_step(1)
 
+    def action_flip_branch(self) -> None:
+        """Jump the cursor to the other side of the nearest fork (if ↔ else).
+
+        After creating an if/else, the cursor lands on the else card (see
+        `add_if_else_cards`), so every card added right after keeps stretching
+        that branch unless you redirect it. This is the fast path: no need to
+        count `[` presses back through the whole graph to reach the if card.
+        """
+        if self._cursor is None:
+            self.notify("add or select a node first", severity="warning")
+            return
+        sibling = self._branch_sibling(self._cursor)
+        if sibling is None:
+            self.notify("cursor isn't on an if/else branch card", severity="warning")
+            return
+        self._cursor = sibling
+        self._render_builder()
+
+    def _branch_sibling(self, node_id: str) -> str | None:
+        """If `node_id` is one target of a fork, return the other target's id."""
+        for node in self._builder.nodes:
+            true_edge = next((e for e in node.edges if e.kind is EdgeKind.ON_TRUE), None)
+            false_edge = next((e for e in node.edges if e.kind is EdgeKind.ON_FALSE), None)
+            if true_edge is None or false_edge is None:
+                continue
+            if true_edge.to == node_id:
+                return false_edge.to
+            if false_edge.to == node_id:
+                return true_edge.to
+        return None
+
     def action_loop_node(self) -> None:
         if self._cursor is None:
             self.notify("add or select a node first", severity="warning")
@@ -808,11 +874,11 @@ class DeVinciApp(App[None]):
         if self._cursor is None:
             self.notify("add or select a node first", severity="warning")
             return
-        agents = self._catalog.of_kind(NodeKind.AGENT)
-        if not agents:
-            self.notify("discover an agent before creating if/else", severity="warning")
+        nodes = self._catalog.nodes
+        if not nodes:
+            self.notify("discover an agent, skill, or command before creating if/else", severity="warning")
             return
-        self.push_screen(BranchEditor(self._cursor, agents), self._on_branch_closed)
+        self.push_screen(BranchEditor(self._cursor, nodes), self._on_branch_closed)
 
     def _on_branch_closed(self, spec: IfElseSpec | None) -> None:
         if spec is None or self._cursor is None:
