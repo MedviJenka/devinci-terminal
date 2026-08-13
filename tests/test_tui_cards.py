@@ -17,9 +17,19 @@ from discovery import NodeKind, scan
 from flows import EdgeKind, NodeStatus
 from tests.test_tui_app import _plain
 from textual.css.query import NoMatches
-from textual.widgets import Input, Select, Static
+from textual.widgets import Input, OptionList, Select, Static
 
-from tui.app import AgentCards, BranchEditor, DeVinciApp, GraphBuilderPanel, NameEditor
+from tui.app import (
+    ActionMenu,
+    AgentCards,
+    BranchEditor,
+    CardEditor,
+    ConfirmDialog,
+    DeVinciApp,
+    GraphBuilderPanel,
+    NameEditor,
+    TextFieldEditor,
+)
 
 
 def _seed(tmp_path: Path) -> Path:
@@ -530,3 +540,236 @@ async def test_adding_after_a_branch_node_adds_no_dead_next_edge(tmp_path: Path)
         reviewer = next(n for n in app._builder.nodes if n.id == "reviewer")
         # No stray NEXT edge — the interpreter would ignore it, orphaning coder-2.
         assert all(e.kind is not EdgeKind.NEXT for e in reviewer.edges)
+
+
+# --- Enter-key action menus ---------------------------------------------------
+#
+# Enter used to mean exactly one thing everywhere: add the highlighted card, or
+# run the highlighted flow. Now it opens a menu of everything you can do with
+# whatever's under the cursor — a catalog card (before it's a node) or a node
+# already in the blueprint — instead of forcing separate hotkeys for edit/
+# prompt/delete that only worked from specific, hard-to-discover places.
+
+
+@pytest.mark.asyncio
+async def test_card_menu_offers_add_prompt_edit_delete(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_card_menu("agent:reviewer")
+        await pilot.pause()
+        assert isinstance(app.screen, ActionMenu)
+        options = app.screen.query_one(OptionList)
+        labels = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
+        assert labels == [
+            "Add to flow",
+            "Add to flow with prompt…",
+            "Edit agent",
+            "Delete agent",
+        ]
+        await pilot.press("escape")
+
+
+@pytest.mark.asyncio
+async def test_card_menu_add_action_adds_the_node(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_card_action("add", "agent:reviewer")
+        assert app._builder.node_ids == ("reviewer",)
+        assert app._cursor == "reviewer"
+
+
+@pytest.mark.asyncio
+async def test_card_menu_add_with_prompt_sets_the_new_nodes_prompt(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_card_action("add_prompt", "agent:reviewer")
+        await pilot.pause()
+        assert isinstance(app.screen, TextFieldEditor)
+        app.screen.query_one("#value", Input).value = "focus on security"
+        await pilot.click("#save")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app._builder.node_ids == ("reviewer",)
+        node = next(n for n in app._builder.nodes if n.id == "reviewer")
+        assert node.prompt == "focus on security"
+
+
+@pytest.mark.asyncio
+async def test_card_menu_add_with_prompt_cancelled_adds_nothing(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_card_action("add_prompt", "agent:reviewer")
+        await pilot.pause()
+        assert isinstance(app.screen, TextFieldEditor)
+        await pilot.press("escape")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app._builder.node_ids == ()  # cancelling skips the add entirely
+
+
+@pytest.mark.asyncio
+async def test_card_menu_edit_opens_the_card_editor_for_that_agent(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_card_action("edit", "agent:reviewer")
+        await pilot.pause()
+        assert isinstance(app.screen, CardEditor)
+        assert app.screen._node.key == "agent:reviewer"
+        await pilot.press("escape")
+
+
+@pytest.mark.asyncio
+async def test_card_menu_delete_confirms_then_removes_the_file(tmp_path: Path) -> None:
+    claude_root = _seed(tmp_path)
+    reviewer_path = claude_root / "agents" / "reviewer.md"
+    app = DeVinciApp(roots=(claude_root,), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_card_action("delete", "agent:reviewer")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmDialog)
+        await pilot.click("#confirm")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert not reviewer_path.exists()
+        assert app._catalog.find(NodeKind.AGENT, "reviewer") is None  # catalog re-scanned
+
+
+@pytest.mark.asyncio
+async def test_card_menu_delete_cancelled_keeps_the_file(tmp_path: Path) -> None:
+    claude_root = _seed(tmp_path)
+    reviewer_path = claude_root / "agents" / "reviewer.md"
+    app = DeVinciApp(roots=(claude_root,), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._on_card_action("delete", "agent:reviewer")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmDialog)
+        await pilot.click("#cancel")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert reviewer_path.exists()
+        assert app._catalog.find(NodeKind.AGENT, "reviewer") is not None
+
+
+@pytest.mark.asyncio
+async def test_node_menu_requires_a_cursor(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_node_menu()
+        await pilot.pause()
+        assert not isinstance(app.screen, ActionMenu)  # nothing to act on yet
+
+
+@pytest.mark.asyncio
+async def test_node_menu_offers_prompt_label_delete_agent(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:reviewer")
+        app.action_node_menu()
+        await pilot.pause()
+        assert isinstance(app.screen, ActionMenu)
+        options = app.screen.query_one(OptionList)
+        labels = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
+        assert labels == [
+            "Edit prompt",
+            "Edit node label",
+            "Delete node",
+            "Edit underlying agent",
+        ]
+        await pilot.press("escape")
+
+
+@pytest.mark.asyncio
+async def test_node_menu_edit_prompt_sets_the_cursor_nodes_prompt(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:reviewer")
+        app._on_node_action("edit_prompt")
+        await pilot.pause()
+        assert isinstance(app.screen, TextFieldEditor)
+        app.screen.query_one("#value", Input).value = "be terse"
+        await pilot.click("#save")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        node = next(n for n in app._builder.nodes if n.id == "reviewer")
+        assert node.prompt == "be terse"
+
+
+@pytest.mark.asyncio
+async def test_node_menu_edit_node_sets_the_cursor_nodes_label(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:reviewer")
+        app._on_node_action("edit_node")
+        await pilot.pause()
+        assert isinstance(app.screen, TextFieldEditor)
+        app.screen.query_one("#value", Input).value = "first pass review"
+        await pilot.click("#save")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        node = next(n for n in app._builder.nodes if n.id == "reviewer")
+        assert node.text == "first pass review"
+
+
+@pytest.mark.asyncio
+async def test_node_menu_delete_node_removes_the_cursor_node(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:reviewer")
+        app.add_node_from_card("agent:coder")
+        app._on_node_action("delete_node")
+
+        assert app._builder.node_ids == ("reviewer",)
+
+
+@pytest.mark.asyncio
+async def test_node_menu_edit_agent_opens_the_editor_for_the_cursor_nodes_ref(
+    tmp_path: Path,
+) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:reviewer")
+        app._on_node_action("edit_agent")
+        await pilot.pause()
+        assert isinstance(app.screen, CardEditor)
+        assert app.screen._node.key == "agent:reviewer"
+        await pilot.press("escape")
+
+
+@pytest.mark.asyncio
+async def test_graph_builder_panel_is_focusable_for_the_enter_binding(tmp_path: Path) -> None:
+    # Enter is claimed by AgentCards' own OptionList binding while it has focus
+    # (see the card-menu tests above); the node menu needs somewhere else to
+    # land focus for "enter" to reach the app-level node_menu binding instead.
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel = app.query_one(GraphBuilderPanel)
+        assert panel.can_focus
+        app.add_node_from_card("agent:reviewer")
+        panel.focus()
+        await pilot.pause()
+        assert app.focused is panel
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ActionMenu)  # reached action_node_menu
+        await pilot.press("escape")

@@ -16,7 +16,7 @@ from common.result import Err, Ok
 from discovery.frontmatter import parse_frontmatter
 from discovery.models import CatalogNode, NodeKind
 from discovery.scanner import scan
-from discovery.writer import write_node
+from discovery.writer import delete_node, write_node
 
 
 def _agent_file(root: Path, name: str, text: str) -> Path:
@@ -150,3 +150,25 @@ def test_unparseable_source_is_err_and_never_clobbers(tmp_path: Path) -> None:
 
     assert isinstance(result, Err)
     assert path.read_text(encoding="utf-8") == garbage  # untouched on disk
+
+
+def test_delete_node_removes_the_source_file(tmp_path: Path) -> None:
+    path = _agent_file(tmp_path, "code-reviewer", _SAMPLE)
+    node = _node_from(path)
+
+    result = delete_node(node)
+
+    assert isinstance(result, Ok)
+    assert result.value == path
+    assert not path.exists()
+
+
+def test_delete_node_missing_source_is_err(tmp_path: Path) -> None:
+    missing = CatalogNode(
+        kind=NodeKind.AGENT,
+        name="ghost",
+        description="not on disk",
+        source=tmp_path / "agents" / "ghost.md",
+    )
+    result = delete_node(missing)
+    assert isinstance(result, Err)

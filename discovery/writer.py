@@ -19,9 +19,24 @@ from common.result import Err, Ok, Result
 from discovery.frontmatter import parse_frontmatter
 from discovery.models import CatalogNode
 
-__all__ = ["write_node"]
+__all__ = ["delete_node", "write_node"]
 
 _FENCE = "---"
+
+
+def delete_node(node: CatalogNode) -> Result[Path, str]:
+    """Delete `node`'s .claude definition file; return the removed path.
+
+    Irreversible — the caller (the TUI) is expected to confirm with the user
+    before calling this, same as any other destructive filesystem operation.
+    """
+    try:
+        node.source.unlink()
+    except FileNotFoundError:
+        return Err(f"'{node.source}' is already gone")
+    except OSError as exc:
+        return Err(f"could not delete '{node.source}': {exc}")
+    return Ok(node.source)
 
 
 def write_node(node: CatalogNode) -> Result[Path, str]:

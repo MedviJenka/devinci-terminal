@@ -103,6 +103,38 @@ def test_set_repeat_unknown_node_is_err() -> None:
     assert isinstance(GraphBuilder().set_repeat("ghost", 2), Err)
 
 
+def test_set_text_renames_a_nodes_card_label() -> None:
+    builder = GraphBuilder().add_node("agent:coder").value
+    updated = builder.set_text("coder", "implement the fix")
+    assert isinstance(updated, Ok)
+    node = next(n for n in updated.value.nodes if n.id == "coder")
+    assert node.text == "implement the fix"
+
+
+def test_set_text_unknown_node_is_err() -> None:
+    assert isinstance(GraphBuilder().set_text("ghost", "x"), Err)
+
+
+def test_set_prompt_sets_a_nodes_run_guidance() -> None:
+    builder = GraphBuilder().add_node("agent:coder").value
+    updated = builder.set_prompt("coder", "be terse")
+    assert isinstance(updated, Ok)
+    node = next(n for n in updated.value.nodes if n.id == "coder")
+    assert node.prompt == "be terse"
+
+
+def test_set_prompt_blank_clears_an_existing_prompt() -> None:
+    builder = GraphBuilder().add_node("agent:coder", prompt="be terse").value
+    updated = builder.set_prompt("coder", "")
+    assert isinstance(updated, Ok)
+    node = next(n for n in updated.value.nodes if n.id == "coder")
+    assert node.prompt == ""
+
+
+def test_set_prompt_unknown_node_is_err() -> None:
+    assert isinstance(GraphBuilder().set_prompt("ghost", "x"), Err)
+
+
 def test_branch_wires_both_conditional_edges() -> None:
     builder = (
         GraphBuilder(name="ship", description="")

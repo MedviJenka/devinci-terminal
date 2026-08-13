@@ -98,6 +98,24 @@ class GraphBuilder:
         )
         return Ok(replace(self, nodes=nodes))
 
+    def set_text(self, node_id: str, text: str) -> Result[GraphBuilder, str]:
+        """Rename `node_id`'s visible card label (the branch/instruction text)."""
+        if node_id not in set(self.node_ids):
+            return Err(f"no node '{node_id}' to edit")
+        nodes = tuple(
+            replace(node, text=text) if node.id == node_id else node for node in self.nodes
+        )
+        return Ok(replace(self, nodes=nodes))
+
+    def set_prompt(self, node_id: str, prompt: str) -> Result[GraphBuilder, str]:
+        """Set the guidance sent to `node_id` when it runs (blank clears it)."""
+        if node_id not in set(self.node_ids):
+            return Err(f"no node '{node_id}' to edit")
+        nodes = tuple(
+            replace(node, prompt=prompt) if node.id == node_id else node for node in self.nodes
+        )
+        return Ok(replace(self, nodes=nodes))
+
     def branch(
         self, from_id: str, true_to: str, false_to: str, condition: str
     ) -> Result[GraphBuilder, str]:

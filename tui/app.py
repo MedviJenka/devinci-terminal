@@ -26,6 +26,7 @@ from textual.widgets.option_list import Option
 
 from common.result import Err, Ok, Result
 from discovery import Catalog, CatalogNode, NodeKind, scan, write_node
+from discovery import delete_node as delete_agent_file
 from flows import (
     Completion,
     EdgeKind,
@@ -63,6 +64,9 @@ __all__ = [
     "CardEditor",
     "RepeatEditor",
     "BranchEditor",
+    "ActionMenu",
+    "TextFieldEditor",
+    "ConfirmDialog",
     "RunPanel",
     "run",
 ]
@@ -78,6 +82,23 @@ _RUN_STYLE: dict[NodeStatus, tuple[str, tuple[int, int, int]]] = {
     NodeStatus.SKIPPED: ("◌", OH_MY_PI["slate"]),
 }
 _PENDING_STYLE: tuple[str, tuple[int, int, int]] = ("◌", OH_MY_PI["slate"])
+
+# ActionMenu payloads. AgentCards' Enter menu acts on a catalog agent before it's
+# a node; the blueprint cursor's Enter menu acts on a node already in the graph —
+# distinct id spaces (e.g. both have a "delete", but one deletes a file, the
+# other an in-memory node), so kept as two separate tuples rather than merged.
+_CARD_ACTIONS: tuple[tuple[str, str], ...] = (
+    ("Add to flow", "add"),
+    ("Add to flow with prompt…", "add_prompt"),
+    ("Edit agent", "edit"),
+    ("Delete agent", "delete"),
+)
+_NODE_ACTIONS: tuple[tuple[str, str], ...] = (
+    ("Edit prompt", "edit_prompt"),
+    ("Edit node label", "edit_node"),
+    ("Delete node", "delete_node"),
+    ("Edit underlying agent", "edit_agent"),
+)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -234,7 +255,15 @@ def _branch_role(builder: GraphBuilder | None, node_id: str | None) -> str | Non
 
 
 class GraphBuilderPanel(Static):
-    """The control-flow graph being assembled by hand from agent cards."""
+    """The control-flow graph being assembled by hand from agent cards.
+
+    Focusable (Tab in from the card panels) so Enter has somewhere of its own
+    to mean "act on the node under the cursor" — see DeVinciApp's app-level
+    "enter" binding, which only fires when nothing more specific (an OptionList,
+    the goal Input) has already claimed the key.
+    """
+
+    can_focus = True
 
     def show(
         self,
@@ -254,7 +283,8 @@ class GraphBuilderPanel(Static):
             return Group(
                 Text(
                     "pick an agent card (Enter) to add a node · [ ] move cursor · "
-                    "l loop ×N · b if/else · f flip if/else · s save+export · x save+run",
+                    "Tab here, Enter for node actions · l loop ×N · b if/else · "
+                    "f flip if/else · s save+export · x save+run",
                     style="dim italic",
                 )
             )
@@ -437,8 +467,110 @@ class BranchEditor(ModalScreen[IfElseSpec | None]):
         self.dismiss(None)
 
 
+class ActionMenu(ModalScreen[str | None]):
+    """Arrows-to-move, Enter-to-choose action picker; dismisses with the action id.
+
+    Generic across both call sites — a highlighted AgentCards card (Enter there
+    used to add it straight to the flow with no other option) and the blueprint
+    cursor (which previously had no single place to edit/prompt/delete a node
+    from at all, only scattered hotkeys). `actions` is an ordered
+    (label, action_id) sequence; Escape or a click outside cancels to None.
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, actions: tuple[tuple[str, str], ...]) -> None:
+        super().__init__()
+        self._title = title
+        self._actions = actions
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="action-menu"):
+            yield Label(self._title)
+            yield OptionList(*(Option(label, id=action_id) for label, action_id in self._actions))
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class TextFieldEditor(ModalScreen[str | None]):
+    """A single free-text field (a node's prompt or its visible card label).
+
+    Dismisses with the trimmed value — including "" to deliberately clear an
+    existing prompt/label — or None if cancelled, which leaves the field untouched.
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, current: str, placeholder: str) -> None:
+        super().__init__()
+        self._title = title
+        self._current = current
+        self._placeholder = placeholder
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="editor"):
+            yield Label(self._title)
+            yield Input(self._current, placeholder=self._placeholder, id="value")
+            with Horizontal(id="editor-buttons"):
+                yield Button("Save", variant="primary", id="save")
+                yield Button("Cancel", id="cancel")
+
+    def _value(self) -> str:
+        return self.query_one("#value", Input).value.strip()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(self._value() if event.button.id == "save" else None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.dismiss(self._value())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmDialog(ModalScreen[bool]):
+    """Yes/no gate for a destructive, hard-to-reverse action (deleting a file)."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, detail: str = "") -> None:
+        super().__init__()
+        self._title = title
+        self._detail = detail
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="editor"):
+            yield Label(self._title)
+            if self._detail:
+                yield Static(self._detail, classes="tools-line")
+            with Horizontal(id="editor-buttons"):
+                yield Button("Delete", variant="error", id="confirm")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class DeVinciApp(App[None]):
     """DeVinci orchestration terminal."""
+
+    # Pin startup focus to the goal input. The default `AUTO_FOCUS = "*"` picks
+    # the first focusable widget by DOM/query order, which is timing-sensitive —
+    # making GraphBuilderPanel focusable (for the "enter" node-menu binding) had
+    # started stealing startup focus from #goal ahead of it. Pinning is also just
+    # the right UX: "type a goal to create a flow" is the app's front door.
+    AUTO_FOCUS = "#goal"
 
     CSS = """
     /* ── Design tokens ─────────────────────────────────────────────
@@ -488,12 +620,15 @@ class DeVinciApp(App[None]):
 
     GraphBuilderPanel {
         height: 1fr; margin: 0 3; overflow-y: auto;
-        border: round $blueprint; padding: 0 2; background: $panel;
+        border: round $blueprint 70%; padding: 0 2; background: $panel;
         border-title-color: $blueprint; border-title-style: bold; border-title-align: left;
         scrollbar-size-vertical: 1;
         scrollbar-color: $blueprint 60%; scrollbar-color-hover: $blueprint;
         scrollbar-color-active: $blueprint; scrollbar-background: $panel;
     }
+    /* Focused (Tab in) is when Enter opens the node menu — full-strength border
+       says so, matching how AgentCards/FlowsPanel light up on focus. */
+    GraphBuilderPanel:focus { border: round $blueprint; }
     RunPanel {
         height: auto; max-height: 6; margin: 0 3 1 3;
         border: round $run; padding: 0 2; background: $panel;
@@ -516,6 +651,18 @@ class DeVinciApp(App[None]):
     #editor-buttons { height: auto; align: right middle; }
     #editor-buttons Button { margin: 0 1; }
     #editor .tools-line { color: $muted; height: auto; margin: 0 0 1 1; }
+
+    ActionMenu { align: center middle; }
+    #action-menu {
+        width: 50; height: auto; padding: 1 2;
+        border: round $goal; background: $panel;
+        border-title-color: $goal; border-title-style: bold;
+    }
+    #action-menu OptionList {
+        height: auto; max-height: 12; margin: 1 0 0 0;
+        border: round $goal 55%; background: $panel;
+    }
+    #action-menu OptionList:focus { border: round $goal; }
     """
 
     BINDINGS = [
@@ -527,6 +674,7 @@ class DeVinciApp(App[None]):
         ("b", "branch_node", "If/else"),
         ("f", "flip_branch", "Flip if/else"),
         ("d", "delete_node", "Delete node"),
+        ("enter", "node_menu", "Node actions"),
         ("s", "save_builder", "Save + export"),
         ("x", "run_builder", "Save + run"),
         ("c", "clear_builder", "Clear graph"),
@@ -668,11 +816,51 @@ class DeVinciApp(App[None]):
         if not selected:
             return
         if isinstance(event.option_list, AgentCards):
-            result = self.add_node_from_card(selected)
-            if isinstance(result, Err):
-                self.notify(result.error, title="Add node failed", severity="error")
+            self.open_card_menu(selected)
             return
         self._run_worker(selected)
+
+    def open_card_menu(self, key: str) -> None:
+        """Enter on a highlighted agent card: what to do with it, not just add it."""
+        node = next((n for n in self._catalog.nodes if n.key == key), None)
+        if node is None:
+            return
+        self.push_screen(
+            ActionMenu(f"'{node.name}' — choose an action", _CARD_ACTIONS),
+            lambda action: self._on_card_action(action, key),
+        )
+
+    def _on_card_action(self, action: str | None, key: str) -> None:
+        if action == "add":
+            result = self.add_node_from_card(key)
+            if isinstance(result, Err):
+                self.notify(result.error, title="Add node failed", severity="error")
+        elif action == "add_prompt":
+            self._add_card_with_prompt_worker(key)
+        elif action == "edit":
+            self._edit_agent_by_key(key)
+        elif action == "delete":
+            self._delete_agent_worker(key)
+
+    @work(exclusive=True)
+    async def _add_card_with_prompt_worker(self, key: str) -> None:
+        node = next((n for n in self._catalog.nodes if n.key == key), None)
+        title = f"Prompt for '{node.name}'" if node is not None else "Prompt"
+        prompt = await self.push_screen_wait(
+            TextFieldEditor(title, "", "guidance sent to the agent when it runs")
+        )
+        if prompt is None:
+            return  # cancelled — add nothing, unlike a plain add which can't be cancelled
+        added = self.add_node_from_card(key)
+        if isinstance(added, Err):
+            self.notify(added.error, title="Add node failed", severity="error")
+            return
+        if not prompt:
+            return
+        new_id = added.value.node_ids[-1]
+        result = self.set_node_prompt(new_id, prompt)
+        if isinstance(result, Err):
+            self.notify(result.error, title="Prompt failed", severity="error")
 
     def add_node_from_card(self, key: str) -> Result[GraphBuilder, str]:
         """Add the agent `key` as a node, connecting it from the current cursor.
@@ -904,6 +1092,86 @@ class DeVinciApp(App[None]):
         if isinstance(result, Err):
             self.notify(result.error, title="Delete failed", severity="error")
 
+    def action_node_menu(self) -> None:
+        """Enter on the blueprint cursor: edit its prompt/label, delete it, or
+        jump to editing the agent it runs — one place instead of hunting across
+        the 'e'/'d'/'l' hotkeys for a node already in the graph.
+        """
+        if self._cursor is None:
+            self.notify("add or select a node first", severity="warning")
+            return
+        self.push_screen(
+            ActionMenu(f"'{self._cursor}' — choose an action", _NODE_ACTIONS),
+            self._on_node_action,
+        )
+
+    def _on_node_action(self, action: str | None) -> None:
+        if self._cursor is None:
+            return
+        cursor = self._cursor
+        if action == "edit_prompt":
+            self._edit_node_prompt_worker(cursor)
+        elif action == "edit_node":
+            self._edit_node_text_worker(cursor)
+        elif action == "delete_node":
+            self.action_delete_node()
+        elif action == "edit_agent":
+            self._edit_node_agent(cursor)
+
+    @work(exclusive=True)
+    async def _edit_node_prompt_worker(self, node_id: str) -> None:
+        node = next((n for n in self._builder.nodes if n.id == node_id), None)
+        current = node.prompt if node is not None else ""
+        value = await self.push_screen_wait(
+            TextFieldEditor(f"Prompt for '{node_id}'", current, "guidance sent when it runs")
+        )
+        if value is None:
+            return
+        result = self.set_node_prompt(node_id, value)
+        if isinstance(result, Err):
+            self.notify(result.error, title="Prompt failed", severity="error")
+
+    @work(exclusive=True)
+    async def _edit_node_text_worker(self, node_id: str) -> None:
+        node = next((n for n in self._builder.nodes if n.id == node_id), None)
+        current = node.text if node is not None else ""
+        value = await self.push_screen_wait(
+            TextFieldEditor(f"Card label for '{node_id}'", current, "visible label (optional)")
+        )
+        if value is None:
+            return
+        result = self.set_node_text(node_id, value)
+        if isinstance(result, Err):
+            self.notify(result.error, title="Edit failed", severity="error")
+
+    def _edit_node_agent(self, node_id: str) -> None:
+        node = next((n for n in self._builder.nodes if n.id == node_id), None)
+        if node is None:
+            return
+        resolved = self._catalog.resolve(node.ref)
+        if isinstance(resolved, Err):
+            self.notify(resolved.error, title="Edit failed", severity="error")
+            return
+        self.push_screen(CardEditor(resolved.value), self._on_editor_closed)
+
+    def set_node_prompt(self, node_id: str, prompt: str) -> Result[GraphBuilder, str]:
+        """Set the guidance sent to a node when it runs (blank clears it)."""
+        updated = self._builder.set_prompt(node_id, prompt)
+        if isinstance(updated, Err):
+            return updated
+        self._builder = updated.value
+        self._render_builder()
+        return updated
+
+    def set_node_text(self, node_id: str, text: str) -> Result[GraphBuilder, str]:
+        """Rename a node's visible card label."""
+        updated = self._builder.set_text(node_id, text)
+        if isinstance(updated, Err):
+            return updated
+        self._builder = updated.value
+        self._render_builder()
+        return updated
+
     def apply_wire(self, text: str) -> Result[GraphBuilder, str]:
         """Add an edge to the graph-under-construction from a wire command."""
         parsed = parse_wire(text)
@@ -924,13 +1192,18 @@ class DeVinciApp(App[None]):
         self._render_builder()
 
     def action_edit_agent(self) -> None:
-        """Open the editor for the highlighted agent card."""
+        """Open the editor for the highlighted agent card ('e')."""
         cards = self.query_one(AgentCards)
         if cards.highlighted is None:
             self.notify("highlight an agent card first", severity="warning")
             return
         option = cards.get_option_at_index(cards.highlighted)
-        node = next((n for n in self._catalog.nodes if n.key == option.id), None)
+        if option.id is not None:
+            self._edit_agent_by_key(option.id)
+
+    def _edit_agent_by_key(self, key: str) -> None:
+        """Open the agent editor for a catalog key — the card-menu 'Edit agent' path."""
+        node = next((n for n in self._catalog.nodes if n.key == key), None)
         if node is None:
             return
         self.push_screen(CardEditor(node), self._on_editor_closed)
@@ -960,6 +1233,36 @@ class DeVinciApp(App[None]):
         if isinstance(written, Ok):
             self.action_refresh()
         return written
+
+    @work(exclusive=True)
+    async def _delete_agent_worker(self, key: str) -> None:
+        node = next((n for n in self._catalog.nodes if n.key == key), None)
+        if node is None:
+            return
+        confirmed = await self.push_screen_wait(
+            ConfirmDialog(
+                f"Delete '{node.name}'?",
+                f"Removes {node.source.name} from disk — cannot be undone.",
+            )
+        )
+        if not confirmed:
+            return
+        result = self.delete_agent(node)
+        if isinstance(result, Err):
+            self.notify(result.error, title="Delete failed", severity="error")
+        else:
+            self.notify(f"Deleted '{node.name}'")
+
+    def delete_agent(self, node: CatalogNode) -> Result[Path, str]:
+        """Remove an agent's .claude definition file from disk, then re-scan the catalog.
+
+        Irreversible — callers should confirm with the user first (see
+        `_delete_agent_worker`, the only production call site).
+        """
+        deleted = delete_agent_file(node)
+        if isinstance(deleted, Ok):
+            self.action_refresh()
+        return deleted
 
     def action_save_builder(self) -> None:
         self._save_builder_worker()
