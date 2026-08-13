@@ -1,4 +1,5 @@
-"""Structured, colourised logging via structlog — written to `.logs/`, never
+"""
+Structured, colourised logging via structlog — written to `.logs/`, never
 to stdout/stderr.
 
 The TUI (`tui.app.DeVinciApp`) owns the terminal for a Textual UI; anything
@@ -10,17 +11,16 @@ for terminal output. Open the file with a pager that understands ANSI colour
 (`less -R`, `bat`, `cat` in most terminals) to see it as intended.
 """
 
-from __future__ import annotations
-
 import logging
+import structlog
+from typing import Optional
 from datetime import datetime
 from pathlib import Path
 
-import structlog
 
 __all__ = ["configure_logging", "get_logger"]
 
-_log_file: Path | None = None
+_log_file: Optional[Path] = None
 
 
 def configure_logging(logs_dir: Path | None = None, *, level: int = logging.DEBUG) -> Path:
@@ -55,7 +55,7 @@ def configure_logging(logs_dir: Path | None = None, *, level: int = logging.DEBU
             structlog.contextvars.merge_contextvars,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
-            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
+            structlog.processors.TimeStamper(fmt="%d/%m/%Y - T%H%M", utc=False),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.dev.ConsoleRenderer(colors=True),
