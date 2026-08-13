@@ -41,11 +41,15 @@ from flows import (
     list_flows,
     run_graph,
     save,
+    save_graph,
 )
 from flows.commands import (
     CrewAICommandWriter,
+    CrewAIGraphCommandWriter,
     FlowCommandWriter,
+    GraphCommandWriter,
     write_flow_command,
+    write_graph_command,
 )
 from runtime import ClaudeCodeCompletion, ClaudeCodeRunner, ClaudeCondition, Condition, NodeRunner
 from tui.blueprint import render_blueprint
@@ -103,6 +107,10 @@ def _default_roots() -> tuple[Path, ...]:
 
 def _default_flows_dir() -> Path:
     return Path.cwd() / ".devinci" / "flows"
+
+
+def _default_graphs_dir() -> Path:
+    return Path.cwd() / ".devinci" / "graphs"
 
 
 class Banner(Static):
@@ -231,7 +239,7 @@ class GraphBuilderPanel(Static):
             return Group(
                 Text(
                     "pick an agent card (Enter) to add a node · [ ] move cursor · "
-                    "l loop ×N · b if/else · x run",
+                    "l loop ×N · b if/else · s save+export · x save+run",
                     style="dim italic",
                 )
             )
@@ -309,6 +317,43 @@ class RepeatEditor(ModalScreen[int | None]):
         self.dismiss(None)
 
 
+class NameEditor(ModalScreen[str | None]):
+    """Ask what to name the graph on save; dismiss with the chosen name.
+
+    The name becomes both the graph's YAML filename and its `/<name>` slash
+    command, so an empty name is refused rather than dismissed to a blank.
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, current: str) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="editor"):
+            yield Label("Save graph as — this names its /command too")
+            yield Input(self._current, placeholder="name (e.g. ship)", id="name")
+            with Horizontal(id="editor-buttons"):
+                yield Button("Save", variant="primary", id="save")
+                yield Button("Cancel", id="cancel")
+
+    def _chosen(self) -> str | None:
+        raw = self.query_one("#name", Input).value.strip()
+        return raw or None
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(self._chosen() if event.button.id == "save" else None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter in the field confirms, matching the primary "Save" button.
+        event.stop()
+        self.dismiss(self._chosen())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class BranchEditor(ModalScreen[IfElseSpec | None]):
     """Create if/else cards: each branch chooses an agent and optional prompt."""
 
@@ -363,36 +408,78 @@ class DeVinciApp(App[None]):
     """DeVinci orchestration terminal."""
 
     CSS = """
-    Screen { background: #0b0f19; }
+    /* ── Design tokens ─────────────────────────────────────────────
+       Primitives → semantic roles. Each region owns an oh-my-pi accent
+       so the eye maps colour → purpose at a glance (mirrors _RUN_STYLE
+       and tui.theme.OH_MY_PI). Change a colour here, not per-rule. */
+    $surface:   #0b0f19;   /* screen base                */
+    $panel:     #101628;   /* raised panel body          */
+    $panel-a:   #10162899; /* raised panel, translucent  */
+    $muted:     #94a3b8;   /* slate — secondary text     */
+    $agents:    #4adeff;   /* cyan                       */
+    $flows:     #a3e635;   /* lime                       */
+    $blueprint: #ec4899;   /* pink                       */
+    $run:       #fbbf24;   /* amber                      */
+    $goal:      #a855f7;   /* violet                     */
+
+    Screen { background: $surface; }
     Banner { height: 3; padding: 1 2 0 2; content-align: left middle; }
     /* The two flexible regions must SHRINK to fit the terminal, or the top
        (agents) overflows off-screen. No min-heights (they force overflow); fr
        weights give the picking panels the larger share, the canvas the rest, and
        RunPanel stays a small auto strip that only grows while a flow runs. */
     #panels { height: 3fr; padding: 1 2; }
+
+    /* Picking panels share a shape and differ only by accent. The border sits
+       dim at rest and lifts to full accent on focus, so the panel receiving
+       keystrokes is unmistakable — feedback, not decoration. */
     AgentCards, FlowsPanel {
         width: 1fr; height: 1fr; margin: 0 1;
-        border: round #4adeff; padding: 1 2; background: #10162899;
+        border: round $agents 55%; padding: 1 2; background: $panel-a;
+        border-title-color: $agents; border-title-style: bold; border-title-align: left;
     }
-    FlowsPanel { border: round #a3e635; }
+    FlowsPanel { border: round $flows 55%; border-title-color: $flows; }
+    AgentCards:focus { border: round $agents; background: $panel; }
+    FlowsPanel:focus { border: round $flows; background: $panel; }
+
+    /* The highlighted/hovered row reads in the panel's own accent so the
+       current pick is obvious in a keyboard-driven list. */
+    AgentCards > .option-list--option-highlighted {
+        background: $agents 20%; color: $agents; text-style: bold;
+    }
+    AgentCards > .option-list--option-hover { background: $agents 12%; }
+    FlowsPanel > .option-list--option-highlighted {
+        background: $flows 20%; color: $flows; text-style: bold;
+    }
+    FlowsPanel > .option-list--option-hover { background: $flows 12%; }
+
     GraphBuilderPanel {
         height: 1fr; margin: 0 3; overflow-y: auto;
-        border: round #ec4899; padding: 0 2; background: #101628;
+        border: round $blueprint; padding: 0 2; background: $panel;
+        border-title-color: $blueprint; border-title-style: bold; border-title-align: left;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: $blueprint 60%; scrollbar-color-hover: $blueprint;
+        scrollbar-color-active: $blueprint; scrollbar-background: $panel;
     }
     RunPanel {
         height: auto; max-height: 6; margin: 0 3 1 3;
-        border: round #fbbf24; padding: 0 2; background: #101628;
+        border: round $run; padding: 0 2; background: $panel;
+        border-title-color: $run; border-title-style: bold; border-title-align: left;
     }
     #goal {
-        margin: 0 3 1 3; border: round #a855f7; background: #101628;
+        margin: 0 3 1 3; border: round $goal 70%; background: $panel;
     }
-    #goal:focus { border: round #ec4899; }
+    #goal:focus { border: round $blueprint; }
+    #goal > .input--placeholder { color: $muted; }
+
     CardEditor { align: center middle; }
     #editor {
         width: 70; height: auto; padding: 1 2;
-        border: round #a855f7; background: #101628;
+        border: round $goal; background: $panel;
+        border-title-color: $goal; border-title-style: bold;
     }
-    #editor Input { margin: 1 0; }
+    #editor Input { margin: 1 0; border: round $goal 55%; }
+    #editor Input:focus { border: round $goal; }
     #editor-buttons { height: auto; align: right middle; }
     #editor-buttons Button { margin: 0 1; }
     """
@@ -405,7 +492,8 @@ class DeVinciApp(App[None]):
         ("l", "loop_node", "Loop ×N"),
         ("b", "branch_node", "If/else"),
         ("d", "delete_node", "Delete node"),
-        ("x", "run_builder", "Run graph"),
+        ("s", "save_builder", "Save + export"),
+        ("x", "run_builder", "Save + run"),
         ("c", "clear_builder", "Clear graph"),
         ("q", "quit", "Quit"),
     ]
@@ -414,20 +502,27 @@ class DeVinciApp(App[None]):
         self,
         roots: tuple[Path, ...] | None = None,
         flows_dir: Path | None = None,
+        graphs_dir: Path | None = None,
         completion: Completion | None = None,
         runner: NodeRunner | None = None,
         condition: Condition | None = None,
         command_writer: FlowCommandWriter | None = None,
+        graph_command_writer: GraphCommandWriter | None = None,
         run_created_flow: bool = False,
     ) -> None:
         super().__init__()
         self._roots = roots if roots is not None else _default_roots()
         self._flows_dir = flows_dir if flows_dir is not None else _default_flows_dir()
+        self._graphs_dir = graphs_dir if graphs_dir is not None else _default_graphs_dir()
         self._completion = completion if completion is not None else ClaudeCodeCompletion()
         self._runner = runner if runner is not None else ClaudeCodeRunner(self._completion)
         self._condition = condition if condition is not None else ClaudeCondition(self._completion)
         self._command_writer = (
             command_writer if command_writer is not None else CrewAICommandWriter()
+        )
+        self._graph_command_writer = (
+            graph_command_writer if graph_command_writer is not None
+            else CrewAIGraphCommandWriter()
         )
         self._run_created_flow = run_created_flow
         self._catalog = Catalog()
@@ -800,6 +895,22 @@ class DeVinciApp(App[None]):
             self.action_refresh()
         return written
 
+    def action_save_builder(self) -> None:
+        self._save_builder_worker()
+
+    @work(exclusive=True)
+    async def _save_builder_worker(self) -> None:
+        name = await self.push_screen_wait(NameEditor(self._builder.name))
+        if name is None:
+            return  # cancelled — leave the canvas untouched, write nothing
+        self._builder = replace(self._builder, name=name)
+        result = await self.save_builder()
+        if isinstance(result, Err):
+            self.notify(result.error, title="Save failed", severity="error")
+            return
+        graph = result.value
+        self.notify(f"Saved graph '{graph.name}' and exported its slash command")
+
     def action_run_builder(self) -> None:
         self._run_builder_worker()
 
@@ -811,14 +922,50 @@ class DeVinciApp(App[None]):
             return
         report = result.value
         outcome = "completed" if report.ok else f"stopped: {report.stopped}"
-        self.notify(f"Graph {outcome}")
+        self.notify(f"Saved & ran graph — {outcome}")
 
-    async def run_builder(self) -> Result[GraphReport, str]:
-        """Build the hand-made graph and execute it, streaming status to the panel."""
+    async def _build_and_save(self) -> Result[Graph, str]:
+        """Build+validate the builder graph and persist its YAML — no command, no run.
+
+        The shared first half of both `s` (save + export) and `x` (save + run): a
+        graph that will not validate is never written, so a half-wired canvas can't
+        masquerade as a saved flow.
+        """
         built = self._builder.build()
         if isinstance(built, Err):
             return built
         graph = built.value
+        saved = await asyncio.to_thread(save_graph, graph, self._graphs_dir)
+        if isinstance(saved, Err):
+            return saved
+        return Ok(graph)
+
+    async def save_builder(self) -> Result[Graph, str]:
+        """`s` — persist the graph YAML and export its self-contained slash command.
+
+        The command write is offloaded to a thread because the CrewAI writer may call
+        a model, which must not block the UI.
+        """
+        saved = await self._build_and_save()
+        if isinstance(saved, Err):
+            return saved
+        graph = saved.value
+        command = await asyncio.to_thread(
+            write_graph_command,
+            graph,
+            self._commands_dir(),
+            writer=self._graph_command_writer,
+        )
+        if isinstance(command, Err):
+            return command
+        return Ok(graph)
+
+    async def run_builder(self) -> Result[GraphReport, str]:
+        """`x` — persist the graph YAML, then execute it live (save + execute)."""
+        saved = await self._build_and_save()
+        if isinstance(saved, Err):
+            return saved
+        graph = saved.value
         self._builder_status = {}
         self._render_builder()
         report = await run_graph(
@@ -860,10 +1007,19 @@ class DeVinciApp(App[None]):
         return await self.run_flow(flow)
 
     async def run_flow(self, flow: Flow) -> Result[RunReport, str]:
-        """Execute `flow`, streaming each node's status into the RunPanel live."""
+        """Execute `flow`, streaming each node's status into the RunPanel live.
+
+        Running a flow also (re)writes its Claude slash command, so a run always
+        leaves a `/<flow>` command on disk — including for flows saved before
+        command authoring existed. The command is a convenience, not the run's
+        purpose: a write failure is surfaced as a warning and never aborts the
+        run. The write is offloaded to a thread because the CrewAI writer may
+        call a model, which must not block the UI mid-run.
+        """
         self._current_flow = flow
         self._run_status = {}
         self._render_run()
+        await self._write_flow_command(flow)
         report = await execute(
             flow,
             self._catalog,
@@ -873,6 +1029,18 @@ class DeVinciApp(App[None]):
         )
         self._render_run()
         return report
+
+    async def _write_flow_command(self, flow: Flow) -> None:
+        """(Re)write the flow's slash command; warn on failure, never abort a run."""
+        written = await asyncio.to_thread(
+            write_flow_command,
+            flow,
+            self._commands_dir(),
+            flows_dir=self._flows_dir,
+            writer=self._command_writer,
+        )
+        if isinstance(written, Err):
+            self.notify(written.error, title="Command not written", severity="warning")
 
     def _on_node_event(self, event: NodeEvent) -> None:
         self._run_status[event.node_id] = event.status

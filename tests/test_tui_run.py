@@ -48,6 +48,37 @@ class FakeRunner:
         return Ok(f"out:{node.name}")
 
 
+class _FallbackWriter:
+    """Command writer that always defers to the deterministic fallback markdown."""
+
+    def write(self, flow: Flow, *, command_name: str, flows_dir: Path) -> Result[str, str]:
+        return Err("no draft")
+
+
+@pytest.mark.asyncio
+async def test_running_a_flow_writes_its_slash_command(tmp_path: Path) -> None:
+    claude_root = _seed_catalog(tmp_path)
+    flows_dir = tmp_path / "flows"
+    save(_demo_flow(), flows_dir)
+
+    app = DeVinciApp(
+        roots=(claude_root,),
+        flows_dir=flows_dir,
+        runner=FakeRunner(),
+        command_writer=_FallbackWriter(),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        report = await app.run_flow_by_name("demo")
+
+        assert isinstance(report, Ok)
+        command = claude_root / "commands" / "demo.md"
+        assert command.exists()
+        text = command.read_text(encoding="utf-8")
+        assert "--run-flow 'demo'" in text
+        assert str(flows_dir) in text
+
+
 @pytest.mark.asyncio
 async def test_running_a_flow_marks_all_nodes_succeeded(tmp_path: Path) -> None:
     claude_root = _seed_catalog(tmp_path)

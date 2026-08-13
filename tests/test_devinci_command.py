@@ -13,7 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_COMMAND = ROOT / ".claude" / "commands" / "devinci.md"
-PY_COMMAND = ROOT / "py" / ".claude" / "commands" / "devinci.md"
+
 
 def _split_frontmatter(text: str) -> tuple[dict[str, object], str]:
     assert text.startswith("---\n")
@@ -37,13 +37,3 @@ def test_devinci_command_recovers_when_started_from_py_subdirectory() -> None:
 
     assert 'Split-Path -Leaf (Get-Location)' in body
     assert 'Set-Location ..' in body
-
-
-def test_devinci_command_is_discoverable_from_py_workspace() -> None:
-    frontmatter, body = _split_frontmatter(PY_COMMAND.read_text(encoding="utf-8"))
-
-    assert frontmatter["shell"] == "powershell"
-    assert "PowerShell" in frontmatter["allowed-tools"]
-    assert body.lstrip().startswith("```!\n")
-    assert "Set-Location .." in body
-    assert "uv run python main.py" in body

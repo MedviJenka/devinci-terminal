@@ -16,7 +16,9 @@ from common.result import Err, Ok
 from discovery import NodeKind, scan
 from flows import EdgeKind, NodeStatus
 from tests.test_tui_app import _plain
-from tui.app import AgentCards, DeVinciApp, GraphBuilderPanel
+from textual.widgets import Input
+
+from tui.app import AgentCards, DeVinciApp, GraphBuilderPanel, NameEditor
 
 
 def _seed(tmp_path: Path) -> Path:
@@ -149,7 +151,10 @@ async def test_run_builder_executes_the_built_graph(tmp_path: Path) -> None:
             return Ok(f"out:{node.name}")
 
     app = DeVinciApp(
-        roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows", runner=FakeRunner()
+        roots=(_seed(tmp_path),),
+        flows_dir=tmp_path / "flows",
+        graphs_dir=tmp_path / "graphs",
+        runner=FakeRunner(),
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -158,14 +163,112 @@ async def test_run_builder_executes_the_built_graph(tmp_path: Path) -> None:
         report = await app.run_builder()
         assert isinstance(report, Ok)
         assert report.value.statuses.get("coder") is NodeStatus.SUCCEEDED
+        # x is save + execute: the graph YAML is persisted before it runs.
+        assert (tmp_path / "graphs" / "draft.yaml").exists()
 
 
 @pytest.mark.asyncio
 async def test_run_empty_builder_is_err(tmp_path: Path) -> None:
-    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    app = DeVinciApp(
+        roots=(_seed(tmp_path),),
+        flows_dir=tmp_path / "flows",
+        graphs_dir=tmp_path / "graphs",
+    )
     async with app.run_test() as pilot:
         await pilot.pause()
         assert isinstance(await app.run_builder(), Err)
+        # An unbuildable canvas is never persisted.
+        assert not (tmp_path / "graphs").exists()
+
+
+class _FallbackGraphWriter:
+    """Graph command writer that always defers to the deterministic orchestration."""
+
+    def write(self, graph, *, command_name):  # type: ignore[no-untyped-def]
+        return Err("no draft")
+
+
+@pytest.mark.asyncio
+async def test_save_builder_persists_graph_and_exports_command(tmp_path: Path) -> None:
+    claude_root = _seed(tmp_path)
+    app = DeVinciApp(
+        roots=(claude_root,),
+        flows_dir=tmp_path / "flows",
+        graphs_dir=tmp_path / "graphs",
+        graph_command_writer=_FallbackGraphWriter(),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:coder")
+        app.add_node_from_card("agent:reviewer")
+
+        result = await app.save_builder()
+
+        assert isinstance(result, Ok)
+        assert (tmp_path / "graphs" / "draft.yaml").exists()
+        command = claude_root / "commands" / "draft.md"
+        assert command.exists()
+        text = command.read_text(encoding="utf-8")
+        # Self-contained orchestration naming both agents; no runtime shim.
+        assert "agent:coder" in text
+        assert "agent:reviewer" in text
+        assert "--run-graph" not in text
+
+
+@pytest.mark.asyncio
+async def test_save_prompts_for_name_and_uses_chosen_name(tmp_path: Path) -> None:
+    claude_root = _seed(tmp_path)
+    app = DeVinciApp(
+        roots=(claude_root,),
+        flows_dir=tmp_path / "flows",
+        graphs_dir=tmp_path / "graphs",
+        graph_command_writer=_FallbackGraphWriter(),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:coder")
+        app.add_node_from_card("agent:reviewer")
+
+        app.action_save_builder()  # opens the NameEditor modal
+        await pilot.pause()
+        assert isinstance(app.screen, NameEditor)
+        app.screen.query_one("#name", Input).value = "ship"
+        await pilot.click("#save")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # The chosen name — not the "draft" default — names both artifacts.
+        assert (tmp_path / "graphs" / "ship.yaml").exists()
+        assert (claude_root / "commands" / "ship.md").exists()
+        assert not (tmp_path / "graphs" / "draft.yaml").exists()
+        assert app._builder.name == "ship"
+
+
+@pytest.mark.asyncio
+async def test_save_cancelled_name_writes_nothing(tmp_path: Path) -> None:
+    claude_root = _seed(tmp_path)
+    app = DeVinciApp(
+        roots=(claude_root,),
+        flows_dir=tmp_path / "flows",
+        graphs_dir=tmp_path / "graphs",
+        graph_command_writer=_FallbackGraphWriter(),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.add_node_from_card("agent:coder")
+
+        app.action_save_builder()
+        await pilot.pause()
+        assert isinstance(app.screen, NameEditor)
+        await pilot.press("escape")  # cancel the NameEditor
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # Nothing persisted, and the builder name is left at its default.
+        assert not (tmp_path / "graphs").exists() or not any(
+            (tmp_path / "graphs").iterdir()
+        )
+        assert app._builder.name == "draft"
 
 
 # --- keyboard canvas: cursor, repeat, branch --------------------------------
