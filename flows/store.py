@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from flows.models import Flow, FlowNode
 from flows.parsing import parse_flow_mapping
@@ -28,6 +29,8 @@ from flows.parsing import parse_flow_mapping
 __all__ = ["save", "load", "list_flows"]
 
 MAX_FLOWS = 1000  # bound on files a single directory listing will parse
+
+logger = get_logger(__name__)
 
 
 def save(flow: Flow, directory: Path) -> Result[Path, str]:
@@ -41,8 +44,10 @@ def save(flow: Flow, directory: Path) -> Result[Path, str]:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{flow.name}.yaml"
         path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        logger.info("flow_saved", name=flow.name, nodes=len(flow.nodes), path=str(path))
         return Ok(path)
     except OSError as exc:
+        logger.error("flow_save_failed", name=flow.name, error=str(exc))
         return Err(f"could not write flow '{flow.name}': {exc}")
 
 
@@ -51,14 +56,21 @@ def load(path: Path) -> Result[Flow, str]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
+        logger.error("flow_load_unreadable", path=str(path), error=str(exc))
         return Err(f"could not read flow file '{path}': {exc}")
 
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
+        logger.error("flow_load_invalid_yaml", path=str(path), error=str(exc))
         return Err(f"invalid YAML in '{path}': {exc}")
 
-    return parse_flow_mapping(raw, context=f"flow '{path}'")
+    result = parse_flow_mapping(raw, context=f"flow '{path}'")
+    if isinstance(result, Err):
+        logger.warning("flow_load_invalid", path=str(path), error=result.error)
+    else:
+        logger.debug("flow_loaded", path=str(path), name=result.value.name)
+    return result
 
 
 def list_flows(directory: Path) -> tuple[Flow, ...]:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from flows.graph import Edge, EdgeKind, Graph, GraphNode, validate_graph
 
@@ -19,6 +20,8 @@ __all__ = ["GraphBuilder"]
 
 # Bound on the dedupe suffix search — far beyond any hand-built graph size.
 _MAX_ID_ATTEMPTS = 1000
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,21 +51,25 @@ class GraphBuilder:
         label; `prompt` is optional guidance sent when the node runs.
         """
         if not ref:
+            logger.warning("add_node_rejected", reason="empty ref")
             return Err("node ref must not be empty")
         existing = set(self.node_ids)
         if node_id is not None:
             if node_id in existing:
+                logger.warning("add_node_rejected", reason="duplicate id", node_id=node_id)
                 return Err(f"node id '{node_id}' already exists")
             new_id = node_id
         else:
             new_id = _unique_id(_base_id(ref), existing)
             if new_id is None:
+                logger.error("add_node_rejected", reason="no unique id", ref=ref)
                 return Err(f"could not derive a unique id from ref '{ref}'")
 
         nodes = self.nodes + (
             GraphNode(id=new_id, ref=ref, text=text, prompt=prompt),
         )
         entry = self.entry or new_id
+        logger.debug("node_added", node_id=new_id, ref=ref, has_prompt=bool(prompt))
         return Ok(replace(self, nodes=nodes, entry=entry))
 
     def connect(
@@ -75,8 +82,10 @@ class GraphBuilder:
         """Add an edge from `from_id` to `to_id`; both nodes must already exist."""
         ids = set(self.node_ids)
         if from_id not in ids:
+            logger.warning("connect_rejected", reason="no from node", from_id=from_id)
             return Err(f"no node '{from_id}' to connect from")
         if to_id not in ids:
+            logger.warning("connect_rejected", reason="no to node", to_id=to_id)
             return Err(f"no node '{to_id}' to connect to")
 
         edge = Edge(to=to_id, kind=kind, condition=condition)
@@ -84,6 +93,7 @@ class GraphBuilder:
             replace(node, edges=node.edges + (edge,)) if node.id == from_id else node
             for node in self.nodes
         )
+        logger.debug("nodes_connected", from_id=from_id, to_id=to_id, kind=kind.value)
         return Ok(replace(self, nodes=nodes))
 
     def set_repeat(self, node_id: str, times: int) -> Result[GraphBuilder, str]:
@@ -110,10 +120,12 @@ class GraphBuilder:
     def set_prompt(self, node_id: str, prompt: str) -> Result[GraphBuilder, str]:
         """Set the guidance sent to `node_id` when it runs (blank clears it)."""
         if node_id not in set(self.node_ids):
+            logger.warning("set_prompt_rejected", reason="no such node", node_id=node_id)
             return Err(f"no node '{node_id}' to edit")
         nodes = tuple(
             replace(node, prompt=prompt) if node.id == node_id else node for node in self.nodes
         )
+        logger.debug("node_prompt_set", node_id=node_id, prompt_len=len(prompt))
         return Ok(replace(self, nodes=nodes))
 
     def branch(
@@ -128,6 +140,9 @@ class GraphBuilder:
         ids = set(self.node_ids)
         for label, target in (("from", from_id), ("true", true_to), ("false", false_to)):
             if target not in ids:
+                logger.warning(
+                    "branch_rejected", reason=f"{label} target is not a node", target=target
+                )
                 return Err(f"branch {label} target '{target}' is not a node")
         branches = (
             Edge(to=true_to, kind=EdgeKind.ON_TRUE, condition=condition),
@@ -137,6 +152,7 @@ class GraphBuilder:
             replace(node, edges=branches) if node.id == from_id else node
             for node in self.nodes
         )
+        logger.debug("node_branched", from_id=from_id, true_to=true_to, false_to=false_to)
         return Ok(replace(self, nodes=nodes))
 
     def branch_to_new_cards(
@@ -173,6 +189,7 @@ class GraphBuilder:
     def remove_node(self, node_id: str) -> Result[GraphBuilder, str]:
         """Drop a node and every edge pointing at it; reassign entry if needed."""
         if node_id not in set(self.node_ids):
+            logger.warning("remove_node_rejected", reason="no such node", node_id=node_id)
             return Err(f"no node '{node_id}' to remove")
         nodes = tuple(
             replace(node, edges=tuple(e for e in node.edges if e.to != node_id))
@@ -182,6 +199,7 @@ class GraphBuilder:
         entry = self.entry
         if entry == node_id:
             entry = nodes[0].id if nodes else ""
+        logger.debug("node_removed", node_id=node_id, remaining=len(nodes))
         return Ok(replace(self, nodes=nodes, entry=entry))
 
     def build(self) -> Result[Graph, str]:
@@ -192,7 +210,12 @@ class GraphBuilder:
             entry=self.entry,
             nodes=self.nodes,
         )
-        return validate_graph(graph)
+        result = validate_graph(graph)
+        if isinstance(result, Err):
+            logger.warning("graph_build_invalid", name=self.name, error=result.error)
+        else:
+            logger.debug("graph_built", name=self.name, nodes=len(self.nodes))
+        return result
 
 
 def _base_id(ref: str) -> str:

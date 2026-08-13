@@ -12,11 +12,14 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from common.result import Result
+from common.logging import get_logger
+from common.result import Err, Result
 from discovery import CatalogNode
 from runtime.completion import Completion
 
 __all__ = ["NodeRunner", "ClaudeCodeRunner"]
+
+logger = get_logger(__name__)
 
 
 @runtime_checkable
@@ -37,7 +40,13 @@ class ClaudeCodeRunner:
         self._completion = completion
 
     def run(self, node: CatalogNode, inputs: str) -> Result[str, str]:
-        return self._completion.complete(_node_prompt(node, inputs))
+        logger.debug("node_prompt_dispatched", node=node.key, input_len=len(inputs))
+        result = self._completion.complete(_node_prompt(node, inputs))
+        if isinstance(result, Err):
+            logger.warning("node_prompt_failed", node=node.key, error=result.error)
+        else:
+            logger.debug("node_prompt_completed", node=node.key, output_len=len(result.value))
+        return result
 
 
 def _node_prompt(node: CatalogNode, inputs: str) -> str:

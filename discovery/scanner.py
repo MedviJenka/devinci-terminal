@@ -12,11 +12,14 @@ from typing import Any
 
 from discovery.frontmatter import parse_frontmatter
 from discovery.models import Catalog, CatalogNode, Diagnostic, NodeKind
+from common.logging import get_logger
 from common.result import Ok
 
 __all__ = ["scan", "MAX_FILES"]
 
 MAX_FILES = 5000  # hard upper bound on files inspected per scan
+
+logger = get_logger(__name__)
 
 
 def scan(roots: Sequence[Path]) -> Catalog:
@@ -26,9 +29,20 @@ def scan(roots: Sequence[Path]) -> Catalog:
     (kind, name) key wins, so project definitions shadow user-global ones when
     the project root is listed first.
     """
+    logger.debug("scan_started", roots=[str(r) for r in roots])
     catalog = Catalog()
     for source, kind in islice(_iter_definition_files(roots), MAX_FILES):
         _ingest(catalog, source, kind)
+    logger.info(
+        "scan_completed",
+        nodes=len(catalog.nodes),
+        diagnostics=len(catalog.diagnostics),
+    )
+    if catalog.diagnostics:
+        for diagnostic in catalog.diagnostics:
+            logger.warning(
+                "scan_diagnostic", source=str(diagnostic.source), issue=diagnostic.message
+            )
     return catalog
 
 

@@ -6,10 +6,13 @@ import re
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from discovery.frontmatter import parse_frontmatter
 from flows.graph import Edge, EdgeKind, Graph, GraphNode
 from flows.models import Flow
+
+logger = get_logger(__name__)
 
 __all__ = [
     "FlowCommandWriter",
@@ -57,6 +60,7 @@ def write_flow_command(
     """Write `<commands_dir>/<flow>.md`; fall back if the CrewAI draft is invalid."""
     command_name = _command_name(flow.name)
     if not command_name:
+        logger.warning("write_flow_command_rejected", flow=flow.name, reason="no usable slug")
         return Err(f"flow '{flow.name}' does not produce a usable command name")
 
     markdown = build_flow_command_markdown(flow, command_name=command_name, flows_dir=flows_dir)
@@ -64,13 +68,21 @@ def write_flow_command(
         drafted = writer.write(flow, command_name=command_name, flows_dir=flows_dir)
         if isinstance(drafted, Ok) and _is_valid_command_markdown(drafted.value):
             markdown = drafted.value
+        else:
+            logger.warning(
+                "flow_command_draft_fallback",
+                flow=flow.name,
+                error=drafted.error if isinstance(drafted, Err) else "invalid markdown shape",
+            )
 
     try:
         commands_dir.mkdir(parents=True, exist_ok=True)
         path = commands_dir / f"{command_name}.md"
         path.write_text(_ensure_trailing_newline(markdown), encoding="utf-8")
+        logger.info("flow_command_written", flow=flow.name, command=command_name, path=str(path))
         return Ok(path)
     except OSError as exc:
+        logger.error("write_flow_command_failed", flow=flow.name, error=str(exc))
         return Err(f"could not write command '{command_name}': {exc}")
 
 
@@ -156,6 +168,7 @@ def write_graph_command(
     """
     command_name = _command_name(graph.name)
     if not command_name:
+        logger.warning("write_graph_command_rejected", graph=graph.name, reason="no usable slug")
         return Err(f"graph '{graph.name}' does not produce a usable command name")
 
     markdown = build_graph_command_markdown(graph, command_name=command_name)
@@ -163,13 +176,23 @@ def write_graph_command(
         drafted = writer.write(graph, command_name=command_name)
         if isinstance(drafted, Ok) and _is_valid_graph_command_markdown(drafted.value):
             markdown = drafted.value
+        else:
+            logger.warning(
+                "graph_command_draft_fallback",
+                graph=graph.name,
+                error=drafted.error if isinstance(drafted, Err) else "invalid markdown shape",
+            )
 
     try:
         commands_dir.mkdir(parents=True, exist_ok=True)
         path = commands_dir / f"{command_name}.md"
         path.write_text(_ensure_trailing_newline(markdown), encoding="utf-8")
+        logger.info(
+            "graph_command_written", graph=graph.name, command=command_name, path=str(path)
+        )
         return Ok(path)
     except OSError as exc:
+        logger.error("write_graph_command_failed", graph=graph.name, error=str(exc))
         return Err(f"could not write command '{command_name}': {exc}")
 
 

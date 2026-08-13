@@ -8,6 +8,7 @@ catalog and the graph passes structural validation, else Err.
 
 from __future__ import annotations
 
+from common.logging import get_logger
 from common.result import Err, Result
 from discovery import Catalog
 from flows.graph import DEFAULT_MAX_VISITS, Graph, validate_graph
@@ -16,30 +17,47 @@ from runtime.completion import Completion
 
 __all__ = ["author_graph", "build_graph_prompt"]
 
+logger = get_logger(__name__)
+
 
 def author_graph(goal: str, catalog: Catalog, completion: Completion) -> Result[Graph, str]:
     """Design a validated control-flow Graph for `goal` from `catalog`'s nodes."""
     goal = goal.strip()
     if not goal:
+        logger.warning("author_graph_rejected", reason="empty goal")
         return Err("goal must not be empty")
+
+    logger.info("author_graph_started", goal=goal, catalog_size=len(catalog.nodes))
 
     reply = completion.complete(build_graph_prompt(goal, catalog))
     if isinstance(reply, Err):
+        logger.error("author_graph_completion_failed", goal=goal, error=reply.error)
         return reply
 
     payload = extract_json_object(reply.value)
     if isinstance(payload, Err):
+        logger.error("author_graph_unparseable_reply", goal=goal, error=payload.error)
         return payload
 
     graph = parse_graph_mapping(payload.value, context="authored graph")
     if isinstance(graph, Err):
+        logger.error("author_graph_invalid_shape", goal=goal, error=graph.error)
         return graph
 
     unresolved = _unresolved_refs(graph.value, catalog)
     if unresolved:
+        logger.error("author_graph_unresolved_refs", goal=goal, refs=unresolved)
         return Err(f"authored graph references unknown node(s): {', '.join(unresolved)}")
 
-    return validate_graph(graph.value)
+    validated = validate_graph(graph.value)
+    if isinstance(validated, Err):
+        logger.error("author_graph_invalid_structure", goal=goal, error=validated.error)
+    else:
+        logger.info(
+            "author_graph_succeeded", goal=goal, name=validated.value.name,
+            nodes=len(validated.value.nodes),
+        )
+    return validated
 
 
 def build_graph_prompt(goal: str, catalog: Catalog) -> str:

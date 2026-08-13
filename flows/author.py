@@ -10,6 +10,7 @@ back a flow that would fail at execution time.
 
 from __future__ import annotations
 
+from common.logging import get_logger
 from common.result import Err, Result
 from discovery import Catalog
 from flows.models import Flow
@@ -19,33 +20,44 @@ from runtime.completion import Completion
 
 __all__ = ["Completion", "author_flow", "build_prompt"]
 
+logger = get_logger(__name__)
+
 
 def author_flow(goal: str, catalog: Catalog, completion: Completion) -> Result[Flow, str]:
     """Design a validated Flow for `goal` from `catalog`'s nodes, or explain why not."""
     goal = goal.strip()
     if not goal:
+        logger.warning("author_flow_rejected", reason="empty goal")
         return Err("goal must not be empty")
+
+    logger.info("author_flow_started", goal=goal, catalog_size=len(catalog.nodes))
 
     reply = completion.complete(build_prompt(goal, catalog))
     if isinstance(reply, Err):
+        logger.error("author_flow_completion_failed", goal=goal, error=reply.error)
         return reply
 
     payload = extract_json_object(reply.value)
     if isinstance(payload, Err):
+        logger.error("author_flow_unparseable_reply", goal=goal, error=payload.error)
         return payload
 
     flow = parse_flow_mapping(payload.value, context="authored flow")
     if isinstance(flow, Err):
+        logger.error("author_flow_invalid_shape", goal=goal, error=flow.error)
         return flow
 
     unresolved = _unresolved_refs(flow.value, catalog)
     if unresolved:
+        logger.error("author_flow_unresolved_refs", goal=goal, refs=unresolved)
         return Err(f"authored flow references unknown node(s): {', '.join(unresolved)}")
 
     layers = topo_layers(flow.value)
     if isinstance(layers, Err):
+        logger.error("author_flow_not_acyclic", goal=goal, error=layers.error)
         return layers
 
+    logger.info("author_flow_succeeded", goal=goal, name=flow.value.name, nodes=len(flow.value.nodes))
     return flow
 
 

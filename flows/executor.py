@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from discovery import Catalog
 from flows.models import Flow, FlowNode
@@ -24,6 +25,8 @@ from flows.topo import topo_layers
 from runtime.runner import NodeRunner
 
 __all__ = ["NodeStatus", "NodeEvent", "RunReport", "EventSink", "execute"]
+
+logger = get_logger(__name__)
 
 
 class NodeStatus(str, Enum):
@@ -72,8 +75,10 @@ async def execute(
     Returns Err only when the flow itself is invalid (cycle/dangling ref); a node
     that fails at runtime is recorded in the report, not raised.
     """
+    logger.info("flow_execute_started", flow=flow.name, nodes=len(flow.nodes))
     layers = topo_layers(flow)
     if isinstance(layers, Err):
+        logger.error("flow_execute_invalid", flow=flow.name, error=layers.error)
         return layers
 
     statuses: dict[str, NodeStatus] = {}
@@ -83,14 +88,21 @@ async def execute(
         if on_event is not None:
             on_event(event)
 
-    for layer in layers.value:
+    for layer_index, layer in enumerate(layers.value):
         runnable = [node for node in layer if _deps_ok(node, statuses)]
         runnable_ids = {node.id for node in runnable}
         for node in layer:
             if node.id not in runnable_ids:
                 statuses[node.id] = NodeStatus.SKIPPED
+                logger.debug("node_skipped", flow=flow.name, node_id=node.id)
                 emit(NodeEvent(node.id, NodeStatus.SKIPPED, "prerequisite did not succeed"))
 
+        logger.debug(
+            "layer_started",
+            flow=flow.name,
+            layer=layer_index,
+            node_ids=[n.id for n in runnable],
+        )
         results = await asyncio.gather(
             *(_run_node(node, catalog, runner, goal, outputs, emit) for node in runnable)
         )
@@ -99,7 +111,11 @@ async def execute(
             if output is not None:
                 outputs[node.id] = output
 
-    return Ok(RunReport(statuses=statuses, outputs=outputs))
+    report = RunReport(statuses=statuses, outputs=outputs)
+    logger.info("flow_execute_finished", flow=flow.name, ok=report.ok, statuses={
+        node_id: status.value for node_id, status in statuses.items()
+    })
+    return Ok(report)
 
 
 def _deps_ok(node: FlowNode, statuses: dict[str, NodeStatus]) -> bool:
@@ -116,17 +132,21 @@ async def _run_node(
 ) -> tuple[NodeStatus, str | None]:
     resolved = catalog.resolve(node.ref)
     if isinstance(resolved, Err):
+        logger.error("node_run_unresolved", node_id=node.id, ref=node.ref, error=resolved.error)
         emit(NodeEvent(node.id, NodeStatus.FAILED, resolved.error))
         return NodeStatus.FAILED, None
 
+    logger.debug("node_run_started", node_id=node.id, ref=node.ref)
     emit(NodeEvent(node.id, NodeStatus.RUNNING))
     inputs = _compose_inputs(node, goal, outputs)
     outcome = await asyncio.to_thread(runner.run, resolved.value, inputs)
 
     if isinstance(outcome, Ok):
+        logger.info("node_run_succeeded", node_id=node.id, ref=node.ref)
         emit(NodeEvent(node.id, NodeStatus.SUCCEEDED))
         return NodeStatus.SUCCEEDED, outcome.value
 
+    logger.warning("node_run_failed", node_id=node.id, ref=node.ref, error=outcome.error)
     emit(NodeEvent(node.id, NodeStatus.FAILED, outcome.error))
     return NodeStatus.FAILED, None
 

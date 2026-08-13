@@ -15,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from discovery.frontmatter import parse_frontmatter
 from discovery.models import CatalogNode
@@ -22,6 +23,8 @@ from discovery.models import CatalogNode
 __all__ = ["delete_node", "write_node"]
 
 _FENCE = "---"
+
+logger = get_logger(__name__)
 
 
 def delete_node(node: CatalogNode) -> Result[Path, str]:
@@ -33,9 +36,12 @@ def delete_node(node: CatalogNode) -> Result[Path, str]:
     try:
         node.source.unlink()
     except FileNotFoundError:
+        logger.warning("delete_node_missing", source=str(node.source))
         return Err(f"'{node.source}' is already gone")
     except OSError as exc:
+        logger.error("delete_node_failed", source=str(node.source), error=str(exc))
         return Err(f"could not delete '{node.source}': {exc}")
+    logger.info("node_deleted", key=node.key, source=str(node.source))
     return Ok(node.source)
 
 
@@ -49,10 +55,12 @@ def write_node(node: CatalogNode) -> Result[Path, str]:
     try:
         text = node.source.read_text(encoding="utf-8")
     except OSError as exc:
+        logger.error("write_node_unreadable", source=str(node.source), error=str(exc))
         return Err(f"could not read '{node.source}': {exc}")
 
     parsed = parse_frontmatter(text)
     if isinstance(parsed, Err):
+        logger.error("write_node_unparseable", source=str(node.source), error=parsed.error)
         return Err(f"cannot edit '{node.source}': {parsed.error}")
     existing, body = parsed.value
 
@@ -63,8 +71,10 @@ def write_node(node: CatalogNode) -> Result[Path, str]:
         rendered = f"{_FENCE}\n{front}\n{_FENCE}\n\n{body}"
         node.source.write_text(rendered, encoding="utf-8")
     except (OSError, yaml.YAMLError) as exc:
+        logger.error("write_node_failed", source=str(node.source), error=str(exc))
         return Err(f"could not write '{node.source}': {exc}")
 
+    logger.info("node_written", key=node.key, source=str(node.source))
     return Ok(node.source)
 
 

@@ -614,6 +614,61 @@ async def test_card_menu_add_with_prompt_cancelled_adds_nothing(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_agent_cards_enter_opens_menu_without_prior_arrow_press(tmp_path: Path) -> None:
+    # Regression: clear_options()+add_option() (used by AgentCards.show(), unlike
+    # ActionMenu's constructor-built OptionList) leaves `highlighted` at None, so
+    # OptionList.action_select() silently no-ops on Enter until the user first
+    # nudges an arrow key. Focusing the panel and pressing Enter straight away
+    # must open the card menu.
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(AgentCards).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ActionMenu)
+        await pilot.press("escape")
+
+
+@pytest.mark.asyncio
+async def test_card_menu_add_with_prompt_via_real_keypresses_adds_the_node(
+    tmp_path: Path,
+) -> None:
+    # Regression: ActionMenu's OptionSelected wasn't stopped, so it bubbled past
+    # the modal to DeVinciApp.on_option_list_option_selected, which — seeing an
+    # option_list that isn't an AgentCards — treated the action id as a flow
+    # name and fired _run_worker("add_prompt"). That worker shares the
+    # @work(exclusive=True) default group with _add_card_with_prompt_worker, so
+    # starting it cancelled the in-flight add, and the node never got added
+    # even after the user filled in the prompt and hit Save.
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        cards = app.query_one(AgentCards)
+        cards.focus()
+        await pilot.pause()
+        highlighted_key = cards.get_option_at_index(cards.highlighted).id
+        await pilot.press("enter")  # open the card menu
+        await pilot.pause()
+        assert isinstance(app.screen, ActionMenu)
+        await pilot.press("down")  # "Add to flow" -> "Add to flow with prompt…"
+        await pilot.press("enter")  # select it
+        await pilot.pause()
+        assert isinstance(app.screen, TextFieldEditor)
+
+        app.screen.query_one("#value", Input).value = "focus on security"
+        await pilot.click("#save")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        expected_id = highlighted_key.split(":", 1)[1]
+        assert app._builder.node_ids == (expected_id,)
+        node = next(n for n in app._builder.nodes if n.id == expected_id)
+        assert node.prompt == "focus on security"
+
+
+@pytest.mark.asyncio
 async def test_card_menu_edit_opens_the_card_editor_for_that_agent(tmp_path: Path) -> None:
     app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
     async with app.run_test() as pilot:

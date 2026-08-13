@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from runtime.completion import Completion
 
 __all__ = ["ClaudeCondition", "Condition"]
+
+logger = get_logger(__name__)
 
 
 @runtime_checkable
@@ -30,10 +33,17 @@ class ClaudeCondition:
         self._completion = completion
 
     def evaluate(self, condition: str, output: str) -> Result[bool, str]:
+        logger.debug("condition_evaluate_started", condition=condition)
         reply = self._completion.complete(_prompt(condition, output))
         if isinstance(reply, Err):
+            logger.error("condition_evaluate_failed", condition=condition, error=reply.error)
             return reply
-        return _parse_verdict(reply.value)
+        verdict = _parse_verdict(reply.value)
+        if isinstance(verdict, Err):
+            logger.warning("condition_verdict_unclear", condition=condition, error=verdict.error)
+        else:
+            logger.debug("condition_evaluate_verdict", condition=condition, verdict=verdict.value)
+        return verdict
 
 
 def _prompt(condition: str, output: str) -> str:

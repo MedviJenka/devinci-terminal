@@ -24,6 +24,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from common.logging import configure_logging, get_logger
 from common.result import Err, Ok, Result
 from discovery import Catalog, CatalogNode, NodeKind, scan, write_node
 from discovery import delete_node as delete_agent_file
@@ -73,6 +74,8 @@ __all__ = [
 
 _BANNER = "◆ DeVinci"
 _SUBTITLE = "orchestration terminal · design · save · run reusable flows"
+
+logger = get_logger(__name__)
 
 # Glyph + palette colour for each node status in the run view.
 _RUN_STYLE: dict[NodeStatus, tuple[str, tuple[int, int, int]]] = {
@@ -172,6 +175,11 @@ class AgentCards(OptionList):
             return
         for node in agents:
             self.add_option(Option(self._card(node), id=node.key))
+        # clear_options() drops the highlight; without re-highlighting, Enter
+        # on a freshly-focused list is a no-op (OptionList.action_select bails
+        # out when nothing is highlighted) — pre-highlight the first card so
+        # Enter works immediately, matching the constructor-built ActionMenu.
+        self.highlighted = 0
 
     def _card(self, node: CatalogNode) -> Group:
         # Compact two-line card: name + meta on the header, description below.
@@ -205,6 +213,9 @@ class FlowsPanel(OptionList):
             return
         for flow in flows:
             self.add_option(Option(self._row(flow), id=flow.name))
+        # see AgentCards.show(): clear_options() drops the highlight, so Enter
+        # would silently do nothing until the user first pressed an arrow key.
+        self.highlighted = 0
 
     def _row(self, flow: Flow) -> Text:
         line = gradient_text(
@@ -493,6 +504,13 @@ class ActionMenu(ModalScreen[str | None]):
         self.query_one(OptionList).focus()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Stop here — unstopped, this bubbles past the modal to the App's own
+        # on_option_list_option_selected, which treats the action id (e.g.
+        # "add_prompt") as a flow name and fires _run_worker(action_id). That
+        # collided with the still-running add-with-prompt worker (both are
+        # @work(exclusive=True) in the same default group), silently
+        # cancelling the add before the prompt was ever saved.
+        event.stop()
         self.dismiss(event.option.id)
 
     def action_cancel(self) -> None:
@@ -730,6 +748,7 @@ class DeVinciApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        logger.info("tui_mounted", roots=[str(r) for r in self._roots])
         self.query_one(AgentCards).border_title = "AGENTS ▸ pick to add a node"
         self.query_one(FlowsPanel).border_title = "FLOWS"
         self.query_one(GraphBuilderPanel).border_title = "FLOW BLUEPRINT"
@@ -737,6 +756,7 @@ class DeVinciApp(App[None]):
         self.action_refresh()
 
     def action_refresh(self) -> None:
+        logger.debug("refresh_started")
         self._catalog = scan(self._roots)
         flows = list_flows(self._flows_dir)
         self._flows = {flow.name: flow for flow in flows}
@@ -744,6 +764,9 @@ class DeVinciApp(App[None]):
         self.query_one(FlowsPanel).show(flows)
         self._render_run()
         self._render_builder()
+        logger.debug(
+            "refresh_completed", agents=len(self._catalog.nodes), flows=len(self._flows)
+        )
 
     # --- create a flow -----------------------------------------------------
 
@@ -780,14 +803,17 @@ class DeVinciApp(App[None]):
         if not goal:
             return Err("goal must not be empty")
 
+        logger.info("author_and_save_started", goal=goal)
         authored = await asyncio.to_thread(
             author_flow, goal, self._catalog, self._completion
         )
         if isinstance(authored, Err):
+            logger.error("author_and_save_failed", goal=goal, error=authored.error)
             return authored
 
         saved = save(authored.value, self._flows_dir)
         if isinstance(saved, Err):
+            logger.error("author_and_save_failed", goal=goal, error=saved.error)
             return saved
 
         command = write_flow_command(
@@ -797,12 +823,14 @@ class DeVinciApp(App[None]):
             writer=self._command_writer,
         )
         if isinstance(command, Err):
+            logger.error("author_and_save_failed", goal=goal, error=command.error)
             return command
 
         if self._run_created_flow:
             run = await self.run_flow(authored.value)
             if isinstance(run, Err):
                 return run
+        logger.info("author_and_save_succeeded", goal=goal, name=authored.value.name)
         return Ok(authored.value)
 
     def _commands_dir(self) -> Path:
@@ -818,19 +846,23 @@ class DeVinciApp(App[None]):
         if isinstance(event.option_list, AgentCards):
             self.open_card_menu(selected)
             return
+        logger.debug("flow_option_selected", flow=selected)
         self._run_worker(selected)
 
     def open_card_menu(self, key: str) -> None:
         """Enter on a highlighted agent card: what to do with it, not just add it."""
         node = next((n for n in self._catalog.nodes if n.key == key), None)
         if node is None:
+            logger.warning("card_menu_open_failed", key=key, reason="no catalog node")
             return
+        logger.debug("card_menu_opened", key=key)
         self.push_screen(
             ActionMenu(f"'{node.name}' — choose an action", _CARD_ACTIONS),
             lambda action: self._on_card_action(action, key),
         )
 
     def _on_card_action(self, action: str | None, key: str) -> None:
+        logger.debug("card_action_selected", action=action, key=key)
         if action == "add":
             result = self.add_node_from_card(key)
             if isinstance(result, Err):
@@ -850,6 +882,7 @@ class DeVinciApp(App[None]):
             TextFieldEditor(title, "", "guidance sent to the agent when it runs")
         )
         if prompt is None:
+            logger.debug("add_with_prompt_cancelled", key=key)
             return  # cancelled — add nothing, unlike a plain add which can't be cancelled
         added = self.add_node_from_card(key)
         if isinstance(added, Err):
@@ -871,10 +904,12 @@ class DeVinciApp(App[None]):
         """
         node = next((n for n in self._catalog.nodes if n.key == key), None)
         if node is None:
+            logger.warning("add_node_from_card_failed", key=key, reason="no catalog node")
             return Err(f"no catalog node '{key}'")
 
         added = self._builder.add_node(key)
         if isinstance(added, Err):
+            logger.warning("add_node_from_card_failed", key=key, error=added.error)
             return added
         builder = added.value
         new_id = builder.node_ids[-1]
@@ -892,6 +927,7 @@ class DeVinciApp(App[None]):
         self._builder_status = {}
         self._cursor = new_id
         self._render_builder()
+        logger.info("node_added_to_blueprint", key=key, node_id=new_id)
         return Ok(builder)
 
     def _is_conditional(self, node_id: str) -> bool:
@@ -1109,6 +1145,7 @@ class DeVinciApp(App[None]):
         if self._cursor is None:
             return
         cursor = self._cursor
+        logger.debug("node_action_selected", action=action, node_id=cursor)
         if action == "edit_prompt":
             self._edit_node_prompt_worker(cursor)
         elif action == "edit_node":
@@ -1229,9 +1266,12 @@ class DeVinciApp(App[None]):
     ) -> Result[Path, str]:
         """Persist edits to an agent's .claude definition, then re-scan the catalog."""
         edited = replace(node, description=description, tools=tools, model=model)
+        logger.debug("edit_agent_started", key=node.key)
         written = write_node(edited)
         if isinstance(written, Ok):
             self.action_refresh()
+        else:
+            logger.error("edit_agent_failed", key=node.key, error=written.error)
         return written
 
     @work(exclusive=True)
@@ -1259,9 +1299,12 @@ class DeVinciApp(App[None]):
         Irreversible — callers should confirm with the user first (see
         `_delete_agent_worker`, the only production call site).
         """
+        logger.info("delete_agent_started", key=node.key)
         deleted = delete_agent_file(node)
         if isinstance(deleted, Ok):
             self.action_refresh()
+        else:
+            logger.error("delete_agent_failed", key=node.key, error=deleted.error)
         return deleted
 
     def action_save_builder(self) -> None:
@@ -1315,8 +1358,10 @@ class DeVinciApp(App[None]):
         The command write is offloaded to a thread because the CrewAI writer may call
         a model, which must not block the UI.
         """
+        logger.info("save_builder_started", name=self._builder.name)
         saved = await self._build_and_save()
         if isinstance(saved, Err):
+            logger.error("save_builder_failed", name=self._builder.name, error=saved.error)
             return saved
         graph = saved.value
         command = await asyncio.to_thread(
@@ -1326,13 +1371,17 @@ class DeVinciApp(App[None]):
             writer=self._graph_command_writer,
         )
         if isinstance(command, Err):
+            logger.error("save_builder_command_failed", name=graph.name, error=command.error)
             return command
+        logger.info("save_builder_succeeded", name=graph.name)
         return Ok(graph)
 
     async def run_builder(self) -> Result[GraphReport, str]:
         """`x` — persist the graph YAML, then execute it live (save + execute)."""
+        logger.info("run_builder_started", name=self._builder.name)
         saved = await self._build_and_save()
         if isinstance(saved, Err):
+            logger.error("run_builder_failed", name=self._builder.name, error=saved.error)
             return saved
         graph = saved.value
         self._builder_status = {}
@@ -1346,6 +1395,11 @@ class DeVinciApp(App[None]):
             on_event=self._on_builder_event,
         )
         self._render_builder()
+        if isinstance(report, Ok):
+            logger.info(
+                "run_builder_finished", name=graph.name, ok=report.value.ok,
+                stopped=report.value.stopped,
+            )
         return report
 
     def _on_builder_event(self, event: NodeEvent) -> None:
@@ -1372,6 +1426,7 @@ class DeVinciApp(App[None]):
     async def run_flow_by_name(self, name: str) -> Result[RunReport, str]:
         flow = self._flows.get(name)
         if flow is None:
+            logger.warning("run_flow_by_name_failed", name=name, reason="no such saved flow")
             return Err(f"no saved flow named '{name}'")
         return await self.run_flow(flow)
 
@@ -1385,6 +1440,7 @@ class DeVinciApp(App[None]):
         run. The write is offloaded to a thread because the CrewAI writer may
         call a model, which must not block the UI mid-run.
         """
+        logger.info("run_flow_started", name=flow.name, nodes=len(flow.nodes))
         self._current_flow = flow
         self._run_status = {}
         self._render_run()
@@ -1397,6 +1453,10 @@ class DeVinciApp(App[None]):
             on_event=self._on_node_event,
         )
         self._render_run()
+        if isinstance(report, Ok):
+            logger.info("run_flow_finished", name=flow.name, ok=report.value.ok)
+        else:
+            logger.error("run_flow_failed", name=flow.name, error=report.error)
         return report
 
     async def _write_flow_command(self, flow: Flow) -> None:
@@ -1423,4 +1483,7 @@ class DeVinciApp(App[None]):
 
 
 def run() -> None:
+    configure_logging()
+    logger.info("app_starting")
     DeVinciApp().run()
+    logger.info("app_stopped")

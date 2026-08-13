@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 import asyncio
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from discovery import Catalog
 from flows.executor import EventSink, NodeEvent, NodeStatus
@@ -27,6 +28,8 @@ from runtime.condition import Condition
 from runtime.runner import NodeRunner
 
 __all__ = ["GraphReport", "run_graph"]
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,8 +59,10 @@ async def run_graph(
     on_event: EventSink | None = None,
 ) -> Result[GraphReport, str]:
     """Execute `graph` from its entry, routing conditionals and bounding loops."""
+    logger.info("graph_run_started", graph=graph.name, entry=graph.entry, nodes=len(graph.nodes))
     valid = validate_graph(graph)
     if isinstance(valid, Err):
+        logger.error("graph_run_invalid", graph=graph.name, error=valid.error)
         return valid
 
     def emit(event: NodeEvent) -> None:
@@ -78,11 +83,13 @@ async def run_graph(
     while current is not None:
         if steps >= step_cap:
             stopped = "step-cap"
+            logger.warning("graph_run_stopped", graph=graph.name, reason=stopped, node_id=current)
             break
         steps += 1
 
         if visits.get(current, 0) >= graph.max_visits:
             stopped = "loop-cap"
+            logger.warning("graph_run_stopped", graph=graph.name, reason=stopped, node_id=current)
             break
         visits[current] = visits.get(current, 0) + 1
 
@@ -92,10 +99,14 @@ async def run_graph(
         resolved = catalog.resolve(node.ref)
         if isinstance(resolved, Err):
             statuses[current] = NodeStatus.FAILED
+            logger.error(
+                "node_run_unresolved", graph=graph.name, node_id=current, error=resolved.error
+            )
             emit(NodeEvent(current, NodeStatus.FAILED, resolved.error))
             stopped = "failed"
             break
 
+        logger.debug("node_run_started", graph=graph.name, node_id=current, ref=node.ref)
         emit(NodeEvent(current, NodeStatus.RUNNING))
         # Run the node in place `repeat` times (bounded, ≥ 1 by validation); the
         # last output is the one routed onward. Any failure stops the whole run.
@@ -111,6 +122,9 @@ async def run_graph(
         assert outcome is not None  # repeat ≥ 1 guarantees at least one run
         if isinstance(outcome, Err):
             statuses[current] = NodeStatus.FAILED
+            logger.warning(
+                "node_run_failed", graph=graph.name, node_id=current, error=outcome.error
+            )
             emit(NodeEvent(current, NodeStatus.FAILED, outcome.error))
             stopped = "failed"
             break
@@ -118,15 +132,27 @@ async def run_graph(
         statuses[current] = NodeStatus.SUCCEEDED
         outputs[current] = outcome.value
         path.append(current)
+        logger.info("node_run_succeeded", graph=graph.name, node_id=current)
         emit(NodeEvent(current, NodeStatus.SUCCEEDED))
 
         nxt = await _next_node(node, outcome.value, condition)
         if isinstance(nxt, Err):
             stopped = "condition-error"
+            logger.error(
+                "graph_run_condition_error", graph=graph.name, node_id=current, error=nxt.error
+            )
             emit(NodeEvent(current, NodeStatus.FAILED, nxt.error))
             break
+        logger.debug("graph_run_routed", graph=graph.name, from_id=current, to_id=nxt.value)
         current = nxt.value
 
+    logger.info(
+        "graph_run_finished",
+        graph=graph.name,
+        stopped=stopped,
+        steps=steps,
+        path=path,
+    )
     return Ok(
         GraphReport(
             statuses=statuses,

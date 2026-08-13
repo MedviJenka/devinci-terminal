@@ -13,6 +13,7 @@ pnpm-debug.log*
 # Tool-generated state
 .devflow/
 .devinci/
+.logs/
 
 # Python-generated files
 __pycache__/

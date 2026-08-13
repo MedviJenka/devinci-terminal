@@ -33,6 +33,7 @@ from typing import Any
 
 import yaml
 
+from common.logging import get_logger
 from common.result import Err, Ok, Result
 from flows.graph import Edge, EdgeKind, Graph, GraphNode, validate_graph
 from flows.parsing import parse_graph_mapping
@@ -40,6 +41,8 @@ from flows.parsing import parse_graph_mapping
 __all__ = ["save_graph", "load_graph", "list_graphs"]
 
 MAX_GRAPHS = 1000  # bound on files a single directory listing will parse
+
+logger = get_logger(__name__)
 
 
 def save_graph(graph: Graph, directory: Path) -> Result[Path, str]:
@@ -55,8 +58,10 @@ def save_graph(graph: Graph, directory: Path) -> Result[Path, str]:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{graph.name}.yaml"
         path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        logger.info("graph_saved", name=graph.name, nodes=len(graph.nodes), path=str(path))
         return Ok(path)
     except OSError as exc:
+        logger.error("graph_save_failed", name=graph.name, error=str(exc))
         return Err(f"could not write graph '{graph.name}': {exc}")
 
 
@@ -65,17 +70,25 @@ def load_graph(path: Path) -> Result[Graph, str]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
+        logger.error("graph_load_unreadable", path=str(path), error=str(exc))
         return Err(f"could not read graph file '{path}': {exc}")
 
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
+        logger.error("graph_load_invalid_yaml", path=str(path), error=str(exc))
         return Err(f"invalid YAML in '{path}': {exc}")
 
     parsed = parse_graph_mapping(raw, context=f"graph '{path}'")
     if isinstance(parsed, Err):
+        logger.warning("graph_load_invalid", path=str(path), error=parsed.error)
         return parsed
-    return validate_graph(parsed.value)
+    validated = validate_graph(parsed.value)
+    if isinstance(validated, Err):
+        logger.warning("graph_load_invalid_structure", path=str(path), error=validated.error)
+    else:
+        logger.debug("graph_loaded", path=str(path), name=validated.value.name)
+    return validated
 
 
 def list_graphs(directory: Path) -> tuple[Graph, ...]:
