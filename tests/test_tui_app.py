@@ -283,3 +283,12 @@ async def test_app_boots_headless_without_error(tmp_path: Path) -> None:
         await pilot.pause()
         assert app.query_one(AgentCards) is not None
         assert app.query_one(FlowsPanel) is not None
+
+
+
+def test_app_styles_are_loaded_from_css_file() -> None:
+    stylesheet = Path(DeVinciApp.CSS_PATH)
+
+    assert stylesheet.name == "app.css"
+    assert stylesheet.is_file()
+    assert "AgentCards" in stylesheet.read_text(encoding="utf-8")

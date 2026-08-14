@@ -16,7 +16,7 @@ from pathlib import Path
 from rich.console import Group
 from rich.table import Table
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
@@ -53,7 +53,13 @@ from flows.commands import (
     write_flow_command,
     write_graph_command,
 )
-from runtime import ClaudeCodeCompletion, ClaudeCodeRunner, ClaudeCondition, Condition, NodeRunner
+from runtime import (
+    ClaudeCodeCompletion,
+    ClaudeCodeRunner,
+    ClaudeCondition,
+    Condition,
+    NodeRunner,
+)
 from tui.blueprint import render_blueprint
 from tui.theme import OH_MY_PI, gradient_text, hex_of
 from tui.wire import parse_wire
@@ -583,105 +589,12 @@ class ConfirmDialog(ModalScreen[bool]):
 class DeVinciApp(App[None]):
     """DeVinci orchestration terminal."""
 
-    # Pin startup focus to the goal input. The default `AUTO_FOCUS = "*"` picks
-    # the first focusable widget by DOM/query order, which is timing-sensitive —
-    # making GraphBuilderPanel focusable (for the "enter" node-menu binding) had
-    # started stealing startup focus from #goal ahead of it. Pinning is also just
-    # the right UX: "type a goal to create a flow" is the app's front door.
-    AUTO_FOCUS = "#goal"
+    # Pin startup focus to the agent picker. The app opens in keyboard-first mode:
+    # Up/Down should immediately choose an agent card, while Tab still reaches the
+    # goal input when the user wants to author a flow from text.
+    AUTO_FOCUS = "AgentCards"
 
-    CSS = """
-    /* ── Design tokens ─────────────────────────────────────────────
-       Primitives → semantic roles. Each region owns an oh-my-pi accent
-       so the eye maps colour → purpose at a glance (mirrors _RUN_STYLE
-       and tui.theme.OH_MY_PI). Change a colour here, not per-rule. */
-    $surface:   #0b0f19;   /* screen base                */
-    $panel:     #101628;   /* raised panel body          */
-    $panel-a:   #10162899; /* raised panel, translucent  */
-    $muted:     #94a3b8;   /* slate — secondary text     */
-    $agents:    #4adeff;   /* cyan                       */
-    $flows:     #a3e635;   /* lime                       */
-    $blueprint: #ec4899;   /* pink                       */
-    $run:       #fbbf24;   /* amber                      */
-    $goal:      #a855f7;   /* violet                     */
-
-    Screen { background: $surface; }
-    Banner { height: 3; padding: 1 2 0 2; content-align: left middle; }
-    /* The two flexible regions must SHRINK to fit the terminal, or the top
-       (agents) overflows off-screen. No min-heights (they force overflow); fr
-       weights give the picking panels the larger share, the canvas the rest, and
-       RunPanel stays a small auto strip that only grows while a flow runs. */
-    #panels { height: 3fr; padding: 1 2; }
-
-    /* Picking panels share a shape and differ only by accent. The border sits
-       dim at rest and lifts to full accent on focus, so the panel receiving
-       keystrokes is unmistakable — feedback, not decoration. */
-    AgentCards, FlowsPanel {
-        width: 1fr; height: 1fr; margin: 0 1;
-        border: round $agents 55%; padding: 1 2; background: $panel-a;
-        border-title-color: $agents; border-title-style: bold; border-title-align: left;
-    }
-    FlowsPanel { border: round $flows 55%; border-title-color: $flows; }
-    AgentCards:focus { border: round $agents; background: $panel; }
-    FlowsPanel:focus { border: round $flows; background: $panel; }
-
-    /* The highlighted/hovered row reads in the panel's own accent so the
-       current pick is obvious in a keyboard-driven list. */
-    AgentCards > .option-list--option-highlighted {
-        background: $agents 20%; color: $agents; text-style: bold;
-    }
-    AgentCards > .option-list--option-hover { background: $agents 12%; }
-    FlowsPanel > .option-list--option-highlighted {
-        background: $flows 20%; color: $flows; text-style: bold;
-    }
-    FlowsPanel > .option-list--option-hover { background: $flows 12%; }
-
-    GraphBuilderPanel {
-        height: 1fr; margin: 0 3; overflow-y: auto;
-        border: round $blueprint 70%; padding: 0 2; background: $panel;
-        border-title-color: $blueprint; border-title-style: bold; border-title-align: left;
-        scrollbar-size-vertical: 1;
-        scrollbar-color: $blueprint 60%; scrollbar-color-hover: $blueprint;
-        scrollbar-color-active: $blueprint; scrollbar-background: $panel;
-    }
-    /* Focused (Tab in) is when Enter opens the node menu — full-strength border
-       says so, matching how AgentCards/FlowsPanel light up on focus. */
-    GraphBuilderPanel:focus { border: round $blueprint; }
-    RunPanel {
-        height: auto; max-height: 6; margin: 0 3 1 3;
-        border: round $run; padding: 0 2; background: $panel;
-        border-title-color: $run; border-title-style: bold; border-title-align: left;
-    }
-    #goal {
-        margin: 0 3 1 3; border: round $goal 70%; background: $panel;
-    }
-    #goal:focus { border: round $blueprint; }
-    #goal > .input--placeholder { color: $muted; }
-
-    CardEditor { align: center middle; }
-    #editor {
-        width: 70; height: auto; padding: 1 2;
-        border: round $goal; background: $panel;
-        border-title-color: $goal; border-title-style: bold;
-    }
-    #editor Input { margin: 1 0; border: round $goal 55%; }
-    #editor Input:focus { border: round $goal; }
-    #editor-buttons { height: auto; align: right middle; }
-    #editor-buttons Button { margin: 0 1; }
-    #editor .tools-line { color: $muted; height: auto; margin: 0 0 1 1; }
-
-    ActionMenu { align: center middle; }
-    #action-menu {
-        width: 50; height: auto; padding: 1 2;
-        border: round $goal; background: $panel;
-        border-title-color: $goal; border-title-style: bold;
-    }
-    #action-menu OptionList {
-        height: auto; max-height: 12; margin: 1 0 0 0;
-        border: round $goal 55%; background: $panel;
-    }
-    #action-menu OptionList:focus { border: round $goal; }
-    """
+    CSS_PATH = Path(__file__).with_name("app.css")
 
     BINDINGS = [
         ("r", "refresh", "Refresh"),
@@ -1033,6 +946,20 @@ class DeVinciApp(App[None]):
         self._render_builder()
         return branched
 
+    def on_key(self, event: events.Key) -> None:
+        """Let the goal field's Up/Down arrows move the agent palette highlight."""
+        if event.key not in {"up", "down"}:
+            return
+        focused = self.focused
+        if not isinstance(focused, Input) or focused.id != "goal":
+            return
+        cards = self.query_one(AgentCards)
+        if cards.option_count == 0:
+            return
+        highlighted = cards.highlighted if cards.highlighted is not None else 0
+        delta = -1 if event.key == "up" else 1
+        cards.highlighted = (highlighted + delta) % cards.option_count
+        event.stop()
 
     def _cursor_step(self, delta: int) -> None:
         ids = self._builder.node_ids

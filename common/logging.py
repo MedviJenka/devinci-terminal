@@ -1,14 +1,13 @@
 """
-Structured, colourised logging via structlog — written to `.logs/`, never
-to stdout/stderr.
+Structured logging via structlog — written to `.logs/`, never to stdout/stderr.
 
 The TUI (`tui.app.DeVinciApp`) owns the terminal for a Textual UI; anything
-printed to stdout mid-run corrupts the display. So every log record — from
-the TUI, from `main.py`'s headless flow runner, and from library code that
-routes through stdlib `logging` — lands only in a timestamped file under
-`.logs/`, rendered with the same colourised `ConsoleRenderer` structlog uses
-for terminal output. Open the file with a pager that understands ANSI colour
-(`less -R`, `bat`, `cat` in most terminals) to see it as intended.
+printed to stdout mid-run corrupts the display. So every log record — from the
+TUI, from `main.py`'s headless flow runner, and from library code that routes
+through stdlib `logging` — lands only in a timestamped file under `.logs`.
+
+Log files are plain text. Editors, CI artifacts, and issue attachments should
+show readable timestamps and levels without requiring ANSI colour support.
 """
 
 import logging
@@ -23,8 +22,9 @@ __all__ = ["configure_logging", "get_logger"]
 _log_file: Optional[Path] = None
 
 
-def configure_logging(logs_dir: Path | None = None, *, level: int = logging.DEBUG) -> Path:
-    """Wire structlog to append colourised, structured records to a file under
+def configure_logging(logs_dir: Optional[Path] = None, *, level: int = logging.DEBUG) -> Path:
+    """
+    Wire structlog to append plain-text, structured records to a file under
     `logs_dir` (default: `<cwd>/.logs`), and return that file's path.
 
     Idempotent — the first call wins; later calls (safe to make from every
@@ -42,8 +42,8 @@ def configure_logging(logs_dir: Path | None = None, *, level: int = logging.DEBU
     handler = logging.FileHandler(log_file, encoding="utf-8")
     handler.setLevel(level)
     # structlog's ConsoleRenderer already produces the full line (timestamp,
-    # level, event, colour codes) — stdlib's own "%(levelname)s:%(name)s:..."
-    # prefix would just duplicate it, so hand the message through as-is.
+    # level, event, fields). Disable colours for files so editors and log
+    # viewers don't show raw ANSI escape sequences.
     handler.setFormatter(logging.Formatter("%(message)s"))
 
     root = logging.getLogger()
@@ -58,7 +58,7 @@ def configure_logging(logs_dir: Path | None = None, *, level: int = logging.DEBU
             structlog.processors.TimeStamper(fmt="%d/%m/%Y - T%H%M", utc=False),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
-            structlog.dev.ConsoleRenderer(colors=True),
+            structlog.dev.ConsoleRenderer(colors=False),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         logger_factory=structlog.stdlib.LoggerFactory(),

@@ -1,0 +1,98 @@
+/* ── Design tokens ─────────────────────────────────────────────
+   Primitives → semantic roles. Each region owns an oh-my-pi accent
+   so the eye maps colour → purpose at a glance (mirrors _RUN_STYLE
+   and tui.theme.OH_MY_PI). Change a colour here, not per-rule.
+
+   Prefix tokens with `dv-` to avoid colliding with Textual's built-in
+   stylesheet variables (for example `$panel`). */
+$dv-surface:   #0b0f19;   /* screen base                */
+$dv-panel:     #101628;   /* raised panel body          */
+$dv-panel-a:   #10162899; /* raised panel, translucent  */
+$dv-muted:     #94a3b8;   /* slate — secondary text     */
+$dv-agents:    #4adeff;   /* cyan                       */
+$dv-flows:     #a3e635;   /* lime                       */
+$dv-blueprint: #ec4899;   /* pink                       */
+$dv-run:       #fbbf24;   /* amber                      */
+$dv-goal:      #a855f7;   /* violet                     */
+
+Screen { background: $dv-surface; }
+Banner { height: 3; padding: 1 2 0 2; content-align: left middle; }
+
+/* The two flexible regions must SHRINK to fit the terminal, or the top
+   (agents) overflows off-screen. No min-heights (they force overflow); fr
+   weights give the picking panels the larger share, the canvas the rest, and
+   RunPanel stays a small auto strip that only grows while a flow runs. */
+#panels { height: 3fr; padding: 1 2; }
+
+/* Picking panels share a shape and differ only by accent. The border sits
+   dim at rest and lifts to full accent on focus, so the panel receiving
+   keystrokes is unmistakable — feedback, not decoration. */
+AgentCards, FlowsPanel {
+    width: 1fr; height: 1fr; margin: 0 1;
+    border: round $dv-agents 55%; padding: 1 2; background: $dv-panel-a;
+    border-title-color: $dv-agents; border-title-style: bold; border-title-align: left;
+}
+
+FlowsPanel { border: round $dv-flows 55%; border-title-color: $dv-flows; }
+AgentCards:focus { border: round $dv-agents; background: $dv-panel; }
+FlowsPanel:focus { border: round $dv-flows; background: $dv-panel; }
+
+/* The highlighted/hovered row reads in the panel's own accent so the
+   current pick is obvious in a keyboard-driven list. */
+AgentCards > .option-list--option-highlighted {
+    background: $dv-agents 20%; color: $dv-agents; text-style: bold;
+}
+AgentCards > .option-list--option-hover { background: $dv-agents 12%; }
+FlowsPanel > .option-list--option-highlighted {
+    background: $dv-flows 20%; color: $dv-flows; text-style: bold;
+}
+FlowsPanel > .option-list--option-hover { background: $dv-flows 12%; }
+
+GraphBuilderPanel {
+    height: 1fr; margin: 0 3; overflow-y: auto;
+    border: round $dv-blueprint 70%; padding: 0 2; background: $dv-panel;
+    border-title-color: $dv-blueprint; border-title-style: bold; border-title-align: left;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $dv-blueprint 60%; scrollbar-color-hover: $dv-blueprint;
+    scrollbar-color-active: $dv-blueprint; scrollbar-background: $dv-panel;
+}
+
+/* Focused (Tab in) is when Enter opens the node menu — full-strength border
+   says so, matching how AgentCards/FlowsPanel light up on focus. */
+GraphBuilderPanel:focus { border: round $dv-blueprint; }
+
+RunPanel {
+    height: auto; max-height: 6; margin: 0 3 1 3;
+    border: round $dv-run; padding: 0 2; background: $dv-panel;
+    border-title-color: $dv-run; border-title-style: bold; border-title-align: left;
+}
+
+#goal {
+    margin: 0 3 1 3; border: round $dv-goal 70%; background: $dv-panel;
+}
+#goal:focus { border: round $dv-blueprint; }
+#goal > .input--placeholder { color: $dv-muted; }
+
+CardEditor { align: center middle; }
+#editor {
+    width: 70; height: auto; padding: 1 2;
+    border: round $dv-goal; background: $dv-panel;
+    border-title-color: $dv-goal; border-title-style: bold;
+}
+#editor Input { margin: 1 0; border: round $dv-goal 55%; }
+#editor Input:focus { border: round $dv-goal; }
+#editor-buttons { height: auto; align: right middle; }
+#editor-buttons Button { margin: 0 1; }
+#editor .tools-line { color: $dv-muted; height: auto; margin: 0 0 1 1; }
+
+ActionMenu { align: center middle; }
+#action-menu {
+    width: 50; height: auto; padding: 1 2;
+    border: round $dv-goal; background: $dv-panel;
+    border-title-color: $dv-goal; border-title-style: bold;
+}
+#action-menu OptionList {
+    height: auto; max-height: 12; margin: 1 0 0 0;
+    border: round $dv-goal 55%; background: $dv-panel;
+}
+#action-menu OptionList:focus { border: round $dv-goal; }

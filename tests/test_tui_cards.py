@@ -632,6 +632,40 @@ async def test_agent_cards_enter_opens_menu_without_prior_arrow_press(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_startup_focus_lands_on_agent_cards(tmp_path: Path) -> None:
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert app.query_one(AgentCards).has_focus
+
+
+@pytest.mark.asyncio
+async def test_goal_field_arrows_move_agent_highlight(tmp_path: Path) -> None:
+    # Even after the user tabs into the flow goal field, Up/Down still need to
+    # move the agent palette highlight so a keyboard user can pick a different
+    # agent without leaving the field first.
+    app = DeVinciApp(roots=(_seed(tmp_path),), flows_dir=tmp_path / "flows")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        goal = app.query_one("#goal", Input)
+        cards = app.query_one(AgentCards)
+        goal.focus()
+        await pilot.pause()
+        assert goal.has_focus
+        assert cards.highlighted == 0
+
+        await pilot.press("down")
+        await pilot.pause()
+
+        assert cards.highlighted == 1
+
+        await pilot.press("up")
+        await pilot.pause()
+
+        assert cards.highlighted == 0
+
+@pytest.mark.asyncio
 async def test_card_menu_add_with_prompt_via_real_keypresses_adds_the_node(
     tmp_path: Path,
 ) -> None:

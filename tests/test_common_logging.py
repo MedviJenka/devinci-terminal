@@ -1,4 +1,4 @@
-"""configure_logging() wires structlog to a colourised file under `.logs/`,
+"""configure_logging() wires structlog to a plain-text file under `.logs`,
 never to stdout — the TUI owns the terminal, so a stray print would corrupt
 the display.
 """
@@ -28,7 +28,7 @@ def test_configure_logging_creates_a_file_under_the_given_dir(tmp_path: Path) ->
     assert log_file.name.startswith("devinci-") and log_file.suffix == ".log"
 
 
-def test_get_logger_writes_structured_colourised_lines_to_the_file(tmp_path: Path) -> None:
+def test_get_logger_writes_structured_plain_text_lines_to_the_file(tmp_path: Path) -> None:
     _reset()
     log_file = devinci_logging.configure_logging(tmp_path / ".logs")
     log = devinci_logging.get_logger("test.module")
@@ -37,7 +37,7 @@ def test_get_logger_writes_structured_colourised_lines_to_the_file(tmp_path: Pat
     content = log_file.read_text(encoding="utf-8")
     assert "node_added" in content
     assert "reviewer" in content
-    assert "\x1b[" in content  # ANSI colour codes from ConsoleRenderer(colors=True)
+    assert "\x1b[" not in content  # file logs must be readable in plain editors
 
 
 def test_configure_logging_is_idempotent(tmp_path: Path) -> None:
